@@ -48,8 +48,15 @@ python .\install_audio_tools.py --cuda cu124 --with-parakeet --parakeet-model nv
 python .\install_audio_tools.py --cuda cu124 --with-sensevoice --sensevoice-model FunAudioLLM/SenseVoiceSmall
 ```
 
-`install_audio_tools.py` installs `torch`, `torchaudio`, `demucs`, `faster-whisper`, and `mutagen`, then
-prints whether CUDA is visible. Pick the `--cuda` value matching your NVIDIA driver
+`install_audio_tools.py` installs `torch`, `torchaudio`, `torchvision`, `demucs`, `faster-whisper`,
+`transformers`, `accelerate`, `librosa`, `soundfile`, and `mutagen`, then prints whether CUDA is
+visible. `torch`/`torchaudio`/`torchvision` are always installed together from the same CUDA
+index so they stay version-matched — a mismatched `torchvision` build (e.g. left over from an
+earlier `torch` upgrade) causes `transformers.pipeline(...)` to fail with
+`RuntimeError: operator torchvision::nms does not exist` when loading the `pho-whisper` backend.
+`accelerate`/`librosa`/`soundfile` are required for the `pho-whisper` backend, which loads
+PhoWhisper checkpoints through `transformers.pipeline(...)` (there is no `pho-whisper` PyPI
+package). Pick the `--cuda` value matching your NVIDIA driver
 (`cu118`, `cu121`, `cu124`, `cu126`), or use `--cpu` builds via `--cuda cpu`. A full log is
 written to `output/install_audio_tools.log`.
 
@@ -116,7 +123,7 @@ python .\process_audio_folder.py --device cuda:0 --model large-v3-turbo
 To use a PhoWhisper model:
 
 ```powershell
-python .\process_audio_folder.py --device cuda:0 --backend pho-whisper --model vinai/PhoWhisper-base --language vi
+python .\process_audio_folder.py --device cuda:0 --backend pho-whisper --model vinai/PhoWhisper-large --language vi
 ```
 
 Other backends:

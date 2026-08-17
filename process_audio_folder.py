@@ -312,17 +312,30 @@ def load_model(model_name: str, backend: str, device: str):
                 except Exception:
                     raise
         except ImportError:
+            # The "pho-whisper" PyPI package does not exist; PhoWhisper models
+            # are standard Hugging Face Whisper checkpoints, so fall back to
+            # loading them through transformers directly.
             try:
                 from transformers import pipeline
-                device_id = 0 if device.startswith('cuda') else -1
+            except ImportError as exc:
+                raise RuntimeError(
+                    f'transformers import failed ({exc}). Run install_audio_tools.py '
+                    'or pip install transformers accelerate.'
+                ) from exc
+            device_id = 0 if device.startswith('cuda') else -1
+            try:
                 return pipeline(
                     'automatic-speech-recognition',
                     model=model_name,
                     device=device_id,
                 )
             except Exception as exc:
+                # Surface the real error instead of masking it. Common causes:
+                # the model requires accepting terms on Hugging Face, a
+                # network/download failure, or an incompatible transformers
+                # version for this checkpoint.
                 raise RuntimeError(
-                    'PhoWhisper is not installed. Run install_audio_tools.py or pip install pho-whisper transformers.'
+                    f'Failed to load PhoWhisper model "{model_name}" via transformers: {exc}'
                 ) from exc
 
     if backend == 'parakeet':
@@ -777,8 +790,12 @@ def main():
         f'Loading {args.backend} model "{args.model}" '
         f'(first run may download several GB)'
     )
-    with progress_heartbeat(f'Loading {args.backend} model "{args.model}"'):
-        model = load_model(args.model, args.backend, device)
+    try:
+        with progress_heartbeat(f'Loading {args.backend} model "{args.model}"'):
+            model = load_model(args.model, args.backend, device)
+    except Exception as load_error:
+        log_progress(f'Failed to load {args.backend} model "{args.model}": {load_error}')
+        raise
     log_progress(f'Model loaded; starting transcription with {args.backend} model "{args.model}"')
     for idx, path in enumerate(files, 1):
         file_start = datetime.now()

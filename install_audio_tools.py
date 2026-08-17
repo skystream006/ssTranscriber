@@ -89,7 +89,7 @@ args = parser.parse_args()
 
 torch_command = [
     sys.executable, '-m', 'pip', 'install', '--upgrade',
-    'torch', 'torchaudio',
+    'torch', 'torchaudio', 'torchvision',
     '--index-url', CUDA_INDEX_URLS[args.cuda],
 ]
 if args.force_reinstall:
@@ -110,6 +110,7 @@ commands = [
         'command': [
             sys.executable, '-m', 'pip', 'install', '--upgrade',
             'demucs', 'faster-whisper', 'transformers', 'sentencepiece', 'mutagen', 'huggingface_hub',
+            'accelerate', 'librosa', 'soundfile',
         ],
         'required': True,
         'name': 'install audio dependencies',
