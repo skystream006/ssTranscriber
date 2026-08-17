@@ -105,6 +105,11 @@ AVAILABLE_MODELS = {
     'sensevoice': (
         'FunAudioLLM/SenseVoiceSmall',
     ),
+    'viet-lyrics': (
+        'kelvinbksoh/whisper-small-vietnamese-lyrics-transcription',
+        'kelvinbksoh/whisper-medium-vietnamese-lyrics-transcription',
+        'kelvinbksoh/whisper-large-v2-vietnamese-lyrics-transcription',
+    ),
 }
 
 
@@ -375,6 +380,28 @@ def load_model(model_name: str, backend: str, device: str):
             device=device_str,
         )
 
+    if backend == 'viet-lyrics':
+        # Standalone backend for kelvinbksoh's Vietnamese lyrics-transcription
+        # checkpoints (fine-tuned Whisper), independent of the pho-whisper backend.
+        try:
+            from transformers import pipeline
+        except ImportError as exc:
+            raise RuntimeError(
+                f'transformers import failed ({exc}). Run install_audio_tools.py '
+                'or pip install transformers accelerate.'
+            ) from exc
+        device_id = 0 if device.startswith('cuda') else -1
+        try:
+            return pipeline(
+                'automatic-speech-recognition',
+                model=model_name,
+                device=device_id,
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                f'Failed to load viet-lyrics model "{model_name}" via transformers: {exc}'
+            ) from exc
+
     raise ValueError(f'Unsupported backend: {backend}')
 
 
@@ -607,7 +634,7 @@ def transcribe_audio(model, path: Path, language, label: str, backend: str):
             raise ValueError(
                 f'sensevoice backend does not support language "{language}". '
                 f'Supported languages: {sorted(sensevoice_supported_languages)}. '
-                'Use --backend faster-whisper or --backend pho-whisper for Vietnamese.'
+                'Use --backend faster-whisper, --backend pho-whisper, or --backend viet-lyrics for Vietnamese.'
             )
         results = model.generate(
             input=str(path),
@@ -640,7 +667,84 @@ def transcribe_audio(model, path: Path, language, label: str, backend: str):
             log_progress(f'{label} — transcription 100%')
         return segments, info
 
+    if backend == 'viet-lyrics':
+        kwargs = {
+            'return_timestamps': True,
+            'chunk_length_s': 30,
+            'stride_length_s': 5,
+        }
+        if language:
+            kwargs['language'] = language
+        result = model(str(path), **kwargs)
+
+        segments = []
+        if isinstance(result, dict):
+            chunks = result.get('chunks') or []
+            if chunks:
+                for chunk in chunks:
+                    text = (chunk.get('text') or '').strip()
+                    if not text:
+                        continue
+                    start = float(chunk.get('timestamp', (0.0, 0.0))[0])
+                    end = float(chunk.get('timestamp', (0.0, 0.0))[1] or start)
+                    segments.append(SimpleNamespace(start=start, end=end, text=text))
+            else:
+                text = (result.get('text') or '').strip()
+                if text:
+                    segments.append(SimpleNamespace(start=0.0, end=0.0, text=text))
+        elif isinstance(result, list):
+            for item in result:
+                if isinstance(item, dict):
+                    text = (item.get('text') or '').strip()
+                    if not text:
+                        continue
+                    ts = item.get('timestamp') or (0.0, 0.0)
+                    start = float(ts[0])
+                    end = float(ts[1] or start)
+                    segments.append(SimpleNamespace(start=start, end=end, text=text))
+        elif isinstance(result, str):
+            text = result.strip()
+            if text:
+                segments.append(SimpleNamespace(start=0.0, end=0.0, text=text))
+
+        duration = max(float(path.stat().st_size or 0.0), 0.001)
+        info = SimpleNamespace(duration=duration, language=language or 'vi')
+        if segments:
+            last_reported = 0
+            for segment in segments:
+                percent = min(100, int(float(segment.end) / max(float(duration), 0.001) * 100))
+                report_at = percent // 10 * 10
+                if report_at >= last_reported + 10:
+                    last_reported = report_at
+                    log_progress(f'{label} — transcription {report_at}%')
+            if last_reported < 100:
+                log_progress(f'{label} — transcription 100%')
+        return segments, info
+
     raise ValueError(f'Unsupported backend for transcription: {backend}')
+
+
+def build_sylt_entries(segments):
+    # Shared with the .txt transcript writer so the on-disk lyrics file always
+    # matches exactly what gets embedded as the mp3's SYLT frame.
+    entries = []
+    for seg in segments:
+        text = (seg.text or '').strip()
+        if not text:
+            continue
+        start_ms = int(float(seg.start) * 1000)
+        entries.append((text, start_ms))
+    return entries
+
+
+def format_sylt_as_lrc(sylt_entries):
+    lines = []
+    for text, start_ms in sylt_entries:
+        minutes, remainder_ms = divmod(max(start_ms, 0), 60_000)
+        seconds, centiseconds = divmod(remainder_ms, 1000)
+        centiseconds //= 10
+        lines.append(f'[{minutes:02d}:{seconds:02d}.{centiseconds:02d}]{text}')
+    return '\n'.join(lines)
 
 
 def write_lyrics_to_file(path: Path, transcript: str, segments, language='und'):
@@ -655,22 +759,15 @@ def write_lyrics_to_file(path: Path, transcript: str, segments, language='und'):
     uslt = USLT(encoding=TEXT_ENCODING, lang=language, desc='Transcription', text=transcript)
     tags.add(uslt)
 
-    sylt_text = []
-    for seg in segments:
-        text = (seg.text or '').strip()
-        if not text:
-            continue
-        start_ms = int(float(seg.start) * 1000)
-        sylt_text.append((text, start_ms))
-
-    if sylt_text:
+    sylt_entries = build_sylt_entries(segments)
+    if sylt_entries:
         sylt = SYLT(
             encoding=TEXT_ENCODING,
             lang=language,
             format=2,
             type=1,
             desc='Transcription',
-            text=sylt_text,
+            text=sylt_entries,
         )
         tags.add(sylt)
 
@@ -695,12 +792,13 @@ def main():
     )
     parser.add_argument(
         '--backend',
-        choices=('faster-whisper', 'pho-whisper', 'parakeet', 'sensevoice'),
+        choices=('faster-whisper', 'pho-whisper', 'parakeet', 'sensevoice', 'viet-lyrics'),
         default='faster-whisper',
         help=(
             'Choose the transcription backend: faster-whisper (Whisper models), '
             'pho-whisper (PhoWhisper), parakeet (NVIDIA NeMo Parakeet/Canary), '
-            'or sensevoice (FunASR SenseVoice).'
+            'sensevoice (FunASR SenseVoice), or viet-lyrics (kelvinbksoh Vietnamese '
+            'lyrics-transcription Whisper fine-tunes).'
         ),
     )
     parser.add_argument(
@@ -709,7 +807,8 @@ def main():
         help=(
             'Model name for the selected backend, e.g. large-v3 (faster-whisper), '
             'vinai/PhoWhisper-base (pho-whisper), nvidia/parakeet-tdt-0.6b-v2 (parakeet), '
-            'or FunAudioLLM/SenseVoiceSmall (sensevoice).'
+            'FunAudioLLM/SenseVoiceSmall (sensevoice), or '
+            'kelvinbksoh/whisper-large-v2-vietnamese-lyrics-transcription (viet-lyrics).'
         ),
     )
     parser.add_argument(
@@ -874,17 +973,19 @@ def main():
             log_progress(f'{path.name} — writing USLT/SYLT metadata and transcript')
             write_lyrics_to_file(path, transcript, segments, language)
 
-            # Write transcript to text file
+            # Write transcript as LRC-style synced lyrics, matching the mp3's SYLT frame exactly.
+            sylt_entries = build_sylt_entries(segments)
+            transcript_output = format_sylt_as_lrc(sylt_entries) if sylt_entries else transcript
             relative_path = path.relative_to(ROOT).with_suffix('.txt')
             transcript_path = TRANSCRIPTS_DIR / relative_path
             transcript_path.parent.mkdir(parents=True, exist_ok=True)
-            transcript_path.write_text(transcript, encoding='utf-8')
+            transcript_path.write_text(transcript_output, encoding='utf-8')
 
             if used_original_fallback:
                 original_relative = path.relative_to(ROOT).with_name(f'{path.stem}_original.txt')
                 original_transcript_path = TRANSCRIPTS_DIR / original_relative
                 original_transcript_path.parent.mkdir(parents=True, exist_ok=True)
-                original_transcript_path.write_text(transcript, encoding='utf-8')
+                original_transcript_path.write_text(transcript_output, encoding='utf-8')
                 log_progress(f'{path.name} — wrote original-audio fallback transcript: {original_transcript_path.name}')
 
             status = f'Success (USLT + SYLT embedded, lang={language})'

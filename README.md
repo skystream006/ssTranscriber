@@ -8,7 +8,8 @@ The default local pipeline uses [Demucs](https://github.com/facebookresearch/dem
 vocals and [faster-whisper](https://github.com/SYSTRAN/faster-whisper) `large-v3` to transcribe
 them. Tagging uses [Mutagen](https://mutagen.readthedocs.io/).
 
-An optional `pho-whisper` backend is also available if you provide a compatible runtime and model.
+Optional `pho-whisper` and `viet-lyrics` backends are also available if you provide a compatible
+runtime and model.
 
 ## Requirements
 
@@ -46,6 +47,7 @@ Other optional backends can be installed the same way:
 ```powershell
 python .\install_audio_tools.py --cuda cu124 --with-parakeet --parakeet-model nvidia/parakeet-tdt-0.6b-v2
 python .\install_audio_tools.py --cuda cu124 --with-sensevoice --sensevoice-model FunAudioLLM/SenseVoiceSmall
+python .\install_audio_tools.py --cuda cu124 --with-viet-lyrics --viet-lyrics-model kelvinbksoh/whisper-large-v2-vietnamese-lyrics-transcription
 ```
 
 `install_audio_tools.py` installs `torch`, `torchaudio`, `torchvision`, `demucs`, `faster-whisper`,
@@ -117,20 +119,16 @@ model, while the first vocal-separation run downloads the Demucs model. Either d
 take several minutes. For faster processing with somewhat lower accuracy, use:
 
 ```powershell
-python .\process_audio_folder.py --device cuda:0 --model large-v3-turbo
+python .\process_audio_folder.py --device cuda:0 --model large-v3
 ```
 
-To use a PhoWhisper model:
+To use a other backend models:
 
 ```powershell
 python .\process_audio_folder.py --device cuda:0 --backend pho-whisper --model vinai/PhoWhisper-large --language vi
-```
-
-Other backends:
-
-```powershell
 python .\process_audio_folder.py --device cuda:0 --backend parakeet --model nvidia/parakeet-tdt-0.6b-v2
 python .\process_audio_folder.py --device cuda:0 --backend sensevoice --model FunAudioLLM/SenseVoiceSmall
+python .\process_audio_folder.py --device cuda:0 --backend viet-lyrics --model kelvinbksoh/whisper-large-v2-vietnamese-lyrics-transcription --language vi
 ```
 
 ### Options
@@ -139,7 +137,7 @@ python .\process_audio_folder.py --device cuda:0 --backend sensevoice --model Fu
 | --- | --- | --- | --- |
 | `--device` | `auto`, `cpu`, `cuda:N` | prompt (`auto` if non-interactive) | Processing device. Detected devices are listed before work starts. |
 | `--language` | ISO 639-1 code (`vi`, `zh`, `ja`, …) | auto-detect | Forces the transcription language. |
-| `--backend` | `faster-whisper`, `pho-whisper`, `parakeet`, `sensevoice` | `faster-whisper` | Selects the transcription backend. |
+| `--backend` | `faster-whisper`, `pho-whisper`, `parakeet`, `sensevoice`, `viet-lyrics` | `faster-whisper` | Selects the transcription backend. |
 | `--model` | backend-specific model name | `large-v3` | Selects the model for the chosen backend. |
 | `--no-vocal-separation` | flag | off | Bypasses Demucs and transcribes the original audio. |
 | `--demucs-mp3` | flag | off | Writes the Demucs-separated vocals stem as MP3 instead of WAV. |
@@ -154,13 +152,17 @@ Common built-in model lists:
 - `pho-whisper`: `vinai/PhoWhisper-small`, `vinai/PhoWhisper-base`, `vinai/PhoWhisper-large`
 - `parakeet`: `nvidia/parakeet-tdt-0.6b-v2`, `nvidia/parakeet-tdt-1.1b`, `nvidia/canary-1b` (requires `install_audio_tools.py --with-parakeet`)
 - `sensevoice`: `FunAudioLLM/SenseVoiceSmall` (requires `install_audio_tools.py --with-sensevoice`; only supports `zh`, `yue`, `en`, `ja`, `ko` — no Vietnamese)
+- `viet-lyrics`: `kelvinbksoh/whisper-small-vietnamese-lyrics-transcription`, `kelvinbksoh/whisper-medium-vietnamese-lyrics-transcription`, `kelvinbksoh/whisper-large-v2-vietnamese-lyrics-transcription` (Whisper fine-tuned specifically on Vietnamese song lyrics; loads through `transformers.pipeline(...)` like `pho-whisper`, but as an independent backend)
 
 Supported extensions: `.mp3`, `.wav`, `.flac`, `.m4a`, `.aac`, `.ogg`, `.opus`, `.wma`.
 
 ### Transcript output behavior
 
 - `output/transcripts/` is cleared at the start of each run so stale files do not remain.
-- Transcript files are written one segment per line instead of as a single paragraph.
+- Transcript files are written as LRC-style synced lyrics (`[mm:ss.xx]text` per line), using the
+  same `(text, start_ms)` entries embedded as the mp3's `SYLT` frame via `mutagen.id3.SYLT`, so the
+  `.txt` file always matches what is written into the audio file and can be used to re-embed SYLT
+  lyrics later if needed.
 - If Demucs misses the opening and the script falls back to the original mix, a sibling file with the suffix `_original.txt` is also created.
 - The fallback triggers when the first usable vocal segment starts later than `--opening-threshold` seconds (default `1.0`), forcing the script to expect transcription to begin almost immediately (0:01) instead of tolerating a longer gap. Raise this value if Demucs-separated vocals legitimately start later in your songs.
 - Demucs stems are written to `temp/htdemucs/...` so the temporary separated vocals can be inspected if needed.
@@ -239,5 +241,6 @@ access and verify the model ID passed via `--pho-model`.
 SenseVoice was only trained on Chinese, Cantonese, English, Japanese, and Korean — it has no
 Vietnamese support at all. Requesting `--language vi` with `--backend sensevoice` now fails
 fast with this error instead of silently producing hallucinated Chinese/Japanese/Korean text.
-Use `--backend faster-whisper` (default) or `--backend pho-whisper` for Vietnamese lyrics.
+Use `--backend faster-whisper` (default), `--backend pho-whisper`, or `--backend viet-lyrics`
+for Vietnamese lyrics.
 

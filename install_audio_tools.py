@@ -85,6 +85,16 @@ parser.add_argument(
     default='FunAudioLLM/SenseVoiceSmall',
     help='SenseVoice model ID on Hugging Face used with --with-sensevoice.',
 )
+parser.add_argument(
+    '--with-viet-lyrics',
+    action='store_true',
+    help='Validate a kelvinbksoh Vietnamese lyrics-transcription Whisper model on Hugging Face.',
+)
+parser.add_argument(
+    '--viet-lyrics-model',
+    default='kelvinbksoh/whisper-large-v2-vietnamese-lyrics-transcription',
+    help='Vietnamese lyrics-transcription model ID on Hugging Face used with --with-viet-lyrics.',
+)
 args = parser.parse_args()
 
 torch_command = [
@@ -176,6 +186,25 @@ if args.with_sensevoice:
         'command': [sys.executable, '-c', sensevoice_verify_code],
         'required': True,
         'name': 'validate SenseVoice model on Hugging Face',
+    })
+if args.with_viet_lyrics:
+    # Uses the same transformers/accelerate/librosa/soundfile stack already
+    # installed above, so no extra packages are needed here.
+    viet_lyrics_verify_code = (
+        'from huggingface_hub import model_info;'
+        'from transformers import AutoConfig;'
+        f'model={args.viet_lyrics_model!r};'
+        'info=model_info(model);'
+        'cfg=AutoConfig.from_pretrained(model);'
+        'print("viet_lyrics_model", model);'
+        'print("repo_sha", getattr(info, "sha", None));'
+        'print("model_type", getattr(cfg, "model_type", None));'
+        'print("status", "ok")'
+    )
+    commands.append({
+        'command': [sys.executable, '-c', viet_lyrics_verify_code],
+        'required': True,
+        'name': 'validate viet-lyrics model on Hugging Face',
     })
 
 verify_code = (
