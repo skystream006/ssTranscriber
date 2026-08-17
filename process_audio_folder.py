@@ -841,13 +841,26 @@ def main():
     parser.add_argument(
         '--opening-threshold',
         type=float,
-        default=10.0,
+        default=20.0,
         help=(
             'Seconds. If the first usable vocal segment from Demucs-separated audio starts '
             'later than this, retry transcription on the original (non-separated) audio to '
             'recover a possibly clipped opening. Default 1.0 forces transcription to expect '
             'the opening at essentially 0:01 instead of tolerating a longer detected gap.'
         ),
+    )
+    parser.add_argument(
+        '--fallback-viet-lyrics',
+        action='store_true',
+        help=(
+            'When the --opening-threshold retry triggers, transcribe the retry pass with the '
+            'viet-lyrics backend instead of re-running the primary --backend/--model.'
+        ),
+    )
+    parser.add_argument(
+        '--fallback-viet-lyrics-model',
+        default='kelvinbksoh/whisper-large-v2-vietnamese-lyrics-transcription',
+        help='Model used for --fallback-viet-lyrics retries.',
     )
     args = parser.parse_args()
 
@@ -896,6 +909,7 @@ def main():
         log_progress(f'Failed to load {args.backend} model "{args.model}": {load_error}')
         raise
     log_progress(f'Model loaded; starting transcription with {args.backend} model "{args.model}"')
+    fallback_model = None
     for idx, path in enumerate(files, 1):
         file_start = datetime.now()
         log_progress(f'[{idx}/{len(files)}] {path.name} — processing started using model "{args.model}"')
@@ -932,25 +946,48 @@ def main():
                 if candidate_segments:
                     fallback_message = (
                         f'{path.name} — first usable vocal segment starts at '
-                        f'{candidate_segments[0].start:.1f}s; retrying original audio '
+                        f'{candidate_segments[0].start:.1f}s; retrying transcription '
                         'to recover the opening'
                     )
                 else:
                     fallback_message = (
-                        f'{path.name} — no usable vocal segments; retrying original audio'
+                        f'{path.name} — no usable vocal segments; retrying transcription'
                     )
+                retry_backend = args.backend
+                retry_model_name = args.model
+                retry_model = model
+                retry_audio_path = path
+                if args.fallback_viet_lyrics:
+                    retry_backend = 'viet-lyrics'
+                    retry_model_name = args.fallback_viet_lyrics_model
+                    retry_audio_path = transcription_path
+                    if fallback_model is None:
+                        log_progress(
+                            f'Loading fallback viet-lyrics model "{retry_model_name}" '
+                            '(first run may download several GB)'
+                        )
+                        with progress_heartbeat(f'Loading fallback viet-lyrics model "{retry_model_name}"'):
+                            fallback_model = load_model(retry_model_name, retry_backend, device)
+                    retry_model = fallback_model
+                    fallback_message += (
+                        f' on the separated vocals using viet-lyrics model "{retry_model_name}"'
+                    )
+                else:
+                    fallback_message += ' on the original audio'
                 log_progress(fallback_message)
                 try:
-                    segments, info = transcribe_audio(model, path, args.language, path.name, args.backend)
+                    segments, info = transcribe_audio(
+                        retry_model, retry_audio_path, args.language, path.name, retry_backend
+                    )
                 except Exception as fallback_error:
-                    # The original file can occasionally fail to decode (e.g. an
+                    # The retry audio can occasionally fail to decode (e.g. an
                     # unusual WAV encoding faster-whisper's loader can't parse)
-                    # even though Demucs read it fine. Keep the Demucs-based
-                    # transcript already produced instead of losing it entirely.
+                    # even though the first pass read it fine. Keep the transcript
+                    # already produced instead of losing it entirely.
                     used_original_fallback = False
                     log_progress(
-                        f'{path.name} — WARNING: could not retry original audio '
-                        f'({fallback_error}); keeping separated-vocal transcript'
+                        f'{path.name} — WARNING: could not retry on {retry_audio_path.name} '
+                        f'({fallback_error}); keeping earlier transcript'
                     )
             segments, removed_promotions, removed_duplicates = filter_transcript_segments(
                 segments, allow_promotions=args.keep_promotions
@@ -982,11 +1019,12 @@ def main():
             transcript_path.write_text(transcript_output, encoding='utf-8')
 
             if used_original_fallback:
-                original_relative = path.relative_to(ROOT).with_name(f'{path.stem}_original.txt')
+                suffix = '_fallback' if args.fallback_viet_lyrics else '_original'
+                original_relative = path.relative_to(ROOT).with_name(f'{path.stem}{suffix}.txt')
                 original_transcript_path = TRANSCRIPTS_DIR / original_relative
                 original_transcript_path.parent.mkdir(parents=True, exist_ok=True)
                 original_transcript_path.write_text(transcript_output, encoding='utf-8')
-                log_progress(f'{path.name} — wrote original-audio fallback transcript: {original_transcript_path.name}')
+                log_progress(f'{path.name} — wrote retry-pass fallback transcript: {original_transcript_path.name}')
 
             status = f'Success (USLT + SYLT embedded, lang={language})'
             results.append((path.name, status))

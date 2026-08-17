@@ -145,6 +145,8 @@ python .\process_audio_folder.py --device cuda:0 --backend viet-lyrics --model k
 | `--file` | relative path under `input/` | all supported files | Processes a single selected audio file. |
 | `--keep-promotions` | flag | off | Keeps known promotional phrases instead of stripping them out. |
 | `--opening-threshold` | seconds (float) | `1.0` | If the first usable vocal segment starts later than this, retries on the original (non-separated) audio to recover a possibly clipped opening. |
+| `--fallback-viet-lyrics` | flag | off | When the `--opening-threshold` retry triggers, transcribes the retry pass with the `viet-lyrics` backend instead of re-running the primary `--backend`/`--model`. |
+| `--fallback-viet-lyrics-model` | Hugging Face model ID | `kelvinbksoh/whisper-large-v2-vietnamese-lyrics-transcription` | Model used for `--fallback-viet-lyrics` retries. |
 
 Common built-in model lists:
 
@@ -163,8 +165,13 @@ Supported extensions: `.mp3`, `.wav`, `.flac`, `.m4a`, `.aac`, `.ogg`, `.opus`, 
   same `(text, start_ms)` entries embedded as the mp3's `SYLT` frame via `mutagen.id3.SYLT`, so the
   `.txt` file always matches what is written into the audio file and can be used to re-embed SYLT
   lyrics later if needed.
-- If Demucs misses the opening and the script falls back to the original mix, a sibling file with the suffix `_original.txt` is also created.
+- If Demucs misses the opening and the script falls back to the original mix, a sibling file with the suffix `_original.txt` is also created. When `--fallback-viet-lyrics` is used, that sibling file is named `_fallback.txt` instead, since the retry re-transcribes the separated vocals stem (not the original mix) with the fallback model.
 - The fallback triggers when the first usable vocal segment starts later than `--opening-threshold` seconds (default `1.0`), forcing the script to expect transcription to begin almost immediately (0:01) instead of tolerating a longer gap. Raise this value if Demucs-separated vocals legitimately start later in your songs.
+- Pass `--fallback-viet-lyrics` to transcribe that retry pass with the `viet-lyrics` backend
+  (`--fallback-viet-lyrics-model`, default `kelvinbksoh/whisper-large-v2-vietnamese-lyrics-transcription`)
+  instead of the primary `--backend`/`--model`. This retry re-runs on the Demucs-separated vocals
+  stem (same audio as the first pass, different model) rather than the original mix. The fallback
+  model is loaded lazily on first use and reused for the rest of the run.
 - Demucs stems are written to `temp/htdemucs/...` so the temporary separated vocals can be inspected if needed.
 - Pass `--demucs-mp3` to have Demucs write the separated vocals stem as MP3 (default `320` kbps, adjustable with `--demucs-mp3-bitrate`) instead of WAV, which uses less disk space at the cost of a lossy re-encode before transcription.
 
