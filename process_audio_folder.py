@@ -251,11 +251,16 @@ def main():
             ).strip()
             if initial_transcript:
                 initial_sylt_entries = build_sylt_entries(candidate_segments)
-                write_transcript_file(
-                    transcript_path,
-                    id3_language(args.language or info.language),
-                    format_sylt_as_lrc(initial_sylt_entries) if initial_sylt_entries else initial_transcript,
+                initial_transcript_output = (
+                    format_sylt_as_lrc(initial_sylt_entries) if initial_sylt_entries else initial_transcript
                 )
+                initial_language = id3_language(args.language or info.language)
+                write_transcript_file(transcript_path, initial_language, initial_transcript_output)
+                # Keep the first pass's own result in a dedicated sibling file too, so a
+                # later retry overwriting the main transcript never loses it entirely.
+                initial_relative = path.relative_to(ROOT).with_name(f'{path.stem}_initial.txt')
+                initial_transcript_path = TRANSCRIPTS_DIR / initial_relative
+                write_transcript_file(initial_transcript_path, initial_language, initial_transcript_output)
             if (
                 transcription_path != path
                 and (

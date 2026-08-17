@@ -167,10 +167,10 @@ Supported extensions: `.mp3`, `.wav`, `.flac`, `.m4a`, `.aac`, `.ogg`, `.opus`, 
   `.txt` file always matches what is written into the audio file and can be used to re-embed SYLT
   lyrics later if needed.
 - If Demucs misses the opening and the script falls back to the original mix, a sibling file with
-  the suffix `_original.txt` is created with that retry's own result. When `--fallback-viet-lyrics`
-  is also used, a second sibling `_fallback.txt` is created with the viet-lyrics pass's result, so
-  both retries stay individually inspectable instead of the fallback silently overwriting the
-  original-audio retry's transcript.
+  the suffix `_initial.txt` preserves the initial separated-vocals result and `_original.txt`
+  contains the original-mix retry. When `--fallback-viet-lyrics` is also used, a third sibling
+  `_fallback.txt` is created with the viet-lyrics pass's result, so all passes stay individually
+  inspectable instead of consecutive retries overwriting earlier transcripts.
 - The fallback triggers when the first usable vocal segment starts later than `--opening-threshold` seconds (default `1.0`), forcing the script to expect transcription to begin almost immediately (0:01) instead of tolerating a longer gap. Raise this value if Demucs-separated vocals legitimately start later in your songs.
 - When the fallback triggers, the script always retries first with the primary `--backend`/`--model`
   on the original (non-separated) audio. Pass `--fallback-viet-lyrics` to additionally run a third
@@ -216,8 +216,8 @@ For each audio file under `input/`, it looks for a transcript with the same rela
 path/filename (stem) under `output/transcripts/`, parses its `[lang:xx]` header and
 `[mm:ss.xx]text` synced lines (written by `process_audio_folder.py`), and embeds them as
 `USLT`/`SYLT` — tagging files **in place** and replacing any existing `USLT`/`SYLT` frames. The
-`_original.txt`/`_fallback.txt` retry-pass sibling files never match an audio filename, so they're
-skipped automatically. Options:
+`_initial.txt`/`_original.txt`/`_fallback.txt` pass-specific sibling files never match an audio
+filename, so they're skipped automatically. Options:
 
 | Flag | Values | Default | Description |
 | --- | --- | --- | --- |

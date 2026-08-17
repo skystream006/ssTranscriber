@@ -40,7 +40,7 @@ def transcribe(model, path, language, label: str):
             # intentional repeats; values near 1.0 preserve more repetitions.
         word_timestamps=True,
         # word_timestamps: Return segment timestamps suitable for SYLT synchronized lyrics.
-        temperature=(0.0, 0.2, 0.4, 0.6, 0.8, 1.0),
+        # temperature=(0.0, 0.2, 0.4, 0.6, 0.8, 1.0),
         # temperature: Enable temperature fallback by passing a tuple.
         #   Prevent the model from getting stuck in a loop of non-speech tokens.
         no_speech_threshold=0.01,
