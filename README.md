@@ -1,8 +1,9 @@
 # ssTranscriber
 
-Batch-transcribes a folder of audio files and embeds the transcript back into each file as
-ID3 lyrics metadata — both **USLT** (unsynchronized, plain-text block) and **SYLT**
-(synchronized, timestamped scrolling lyrics).
+Batch-transcribes a folder of audio files and writes synced lyric transcripts to
+`output/transcripts/`. A separate, manually-run step (`embed_lyrics.py`) then embeds those
+transcripts back into each audio file as ID3 lyrics metadata — both **USLT** (unsynchronized,
+plain-text block) and **SYLT** (synchronized, timestamped scrolling lyrics).
 
 The default local pipeline uses [Demucs](https://github.com/facebookresearch/demucs) to isolate
 vocals and [faster-whisper](https://github.com/SYSTRAN/faster-whisper) `large-v3` to transcribe
@@ -145,7 +146,7 @@ python .\process_audio_folder.py --device cuda:0 --backend viet-lyrics --model k
 | `--file` | relative path under `input/` | all supported files | Processes a single selected audio file. |
 | `--keep-promotions` | flag | off | Keeps known promotional phrases instead of stripping them out. |
 | `--opening-threshold` | seconds (float) | `1.0` | If the first usable vocal segment starts later than this, retries on the original (non-separated) audio to recover a possibly clipped opening. |
-| `--fallback-viet-lyrics` | flag | off | When the `--opening-threshold` retry triggers, transcribes the retry pass with the `viet-lyrics` backend instead of re-running the primary `--backend`/`--model`. |
+| `--fallback-viet-lyrics` | flag | off | When the `--opening-threshold` retry triggers, runs a 3rd pass with the `viet-lyrics` backend (on the separated vocals) after the primary `--backend`/`--model` retry on the original audio. |
 | `--fallback-viet-lyrics-model` | Hugging Face model ID | `kelvinbksoh/whisper-large-v2-vietnamese-lyrics-transcription` | Model used for `--fallback-viet-lyrics` retries. |
 
 Common built-in model lists:
@@ -165,19 +166,26 @@ Supported extensions: `.mp3`, `.wav`, `.flac`, `.m4a`, `.aac`, `.ogg`, `.opus`, 
   same `(text, start_ms)` entries embedded as the mp3's `SYLT` frame via `mutagen.id3.SYLT`, so the
   `.txt` file always matches what is written into the audio file and can be used to re-embed SYLT
   lyrics later if needed.
-- If Demucs misses the opening and the script falls back to the original mix, a sibling file with the suffix `_original.txt` is also created. When `--fallback-viet-lyrics` is used, that sibling file is named `_fallback.txt` instead, since the retry re-transcribes the separated vocals stem (not the original mix) with the fallback model.
+- If Demucs misses the opening and the script falls back to the original mix, a sibling file with
+  the suffix `_original.txt` is created with that retry's own result. When `--fallback-viet-lyrics`
+  is also used, a second sibling `_fallback.txt` is created with the viet-lyrics pass's result, so
+  both retries stay individually inspectable instead of the fallback silently overwriting the
+  original-audio retry's transcript.
 - The fallback triggers when the first usable vocal segment starts later than `--opening-threshold` seconds (default `1.0`), forcing the script to expect transcription to begin almost immediately (0:01) instead of tolerating a longer gap. Raise this value if Demucs-separated vocals legitimately start later in your songs.
-- Pass `--fallback-viet-lyrics` to transcribe that retry pass with the `viet-lyrics` backend
-  (`--fallback-viet-lyrics-model`, default `kelvinbksoh/whisper-large-v2-vietnamese-lyrics-transcription`)
-  instead of the primary `--backend`/`--model`. This retry re-runs on the Demucs-separated vocals
-  stem (same audio as the first pass, different model) rather than the original mix. The fallback
-  model is loaded lazily on first use and reused for the rest of the run.
+- When the fallback triggers, the script always retries first with the primary `--backend`/`--model`
+  on the original (non-separated) audio. Pass `--fallback-viet-lyrics` to additionally run a third
+  pass afterward with the `viet-lyrics` backend (`--fallback-viet-lyrics-model`, default
+  `kelvinbksoh/whisper-large-v2-vietnamese-lyrics-transcription`) on the Demucs-separated vocals
+  stem — so a triggered fallback with `--fallback-viet-lyrics` means 3 transcription passes total
+  (initial separated-vocals pass, original-audio retry, viet-lyrics fallback). The main `.txt` file
+  and each sibling file are written to disk immediately after their respective pass, so a crash in
+  a later pass never loses an earlier one's result.
+  The viet-lyrics fallback runs in its own isolated worker process (loaded lazily once and reused
+  for the rest of the run) to avoid a cuDNN conflict with the primary faster-whisper model.
 - Demucs stems are written to `temp/htdemucs/...` so the temporary separated vocals can be inspected if needed.
 - Pass `--demucs-mp3` to have Demucs write the separated vocals stem as MP3 (default `320` kbps, adjustable with `--demucs-mp3-bitrate`) instead of WAV, which uses less disk space at the cost of a lossy re-encode before transcription.
 
 ## Output
-
-Files are tagged **in place**. Existing `USLT`/`SYLT` frames are replaced.
 
 A per-file summary is printed and written to `output/processing_log.txt`:
 
@@ -189,10 +197,34 @@ Failed: 0
 Skipped: 0
 
 Per file:
-- Millionaire.mp3 — Success (USLT + SYLT embedded, lang=eng)
+- Millionaire.mp3 — Success (transcript written, lang=eng)
 ```
 
 Both `input/` and `output/` are git-ignored and created automatically on startup.
+
+## Embed lyrics into the audio files
+
+`process_audio_folder.py` only writes transcript `.txt` files under `output/transcripts/` — it
+does **not** embed anything into the audio itself. Run `embed_lyrics.py` afterward (manually, once
+you're happy with the transcripts) to embed `USLT`/`SYLT` tags:
+
+```powershell
+python .\embed_lyrics.py
+```
+
+For each audio file under `input/`, it looks for a transcript with the same relative
+path/filename (stem) under `output/transcripts/`, parses its `[lang:xx]` header and
+`[mm:ss.xx]text` synced lines (written by `process_audio_folder.py`), and embeds them as
+`USLT`/`SYLT` — tagging files **in place** and replacing any existing `USLT`/`SYLT` frames. The
+`_original.txt`/`_fallback.txt` retry-pass sibling files never match an audio filename, so they're
+skipped automatically. Options:
+
+| Flag | Values | Default | Description |
+| --- | --- | --- | --- |
+| `--language` | ISO 639-1 code (`vi`, `zh`, `ja`, …) | the language recorded in the transcript, or `und` | Overrides the tagged language. |
+| `--file` | relative path under `input/` | all supported files | Only embed one selected audio file. |
+
+A per-file summary is printed and written to `output/embed_lyrics_log.txt`.
 
 ## Remove embedded metadata
 
@@ -248,6 +280,16 @@ access and verify the model ID passed via `--pho-model`.
 SenseVoice was only trained on Chinese, Cantonese, English, Japanese, and Korean — it has no
 Vietnamese support at all. Requesting `--language vi` with `--backend sensevoice` now fails
 fast with this error instead of silently producing hallucinated Chinese/Japanese/Korean text.
+Use `--backend faster-whisper` (default), `--backend pho-whisper`, or `--backend viet-lyrics`
+for Vietnamese lyrics.
+
+**`Could not load symbol cudnnGetLibConfig. Error code 127`**
+On Windows, `faster-whisper` (CTranslate2) and `transformers`/`torch` bundle different,
+ABI-incompatible cuDNN builds. Loading both in the same process (e.g. the primary model plus
+an in-process fallback model) crashes with this error. `--fallback-viet-lyrics` retries run in
+an isolated worker process (`viet_lyrics_worker.py`) specifically to avoid this; if you see this
+error elsewhere, avoid loading a transformers-based backend in the same run/process as
+`faster-whisper`.
 Use `--backend faster-whisper` (default), `--backend pho-whisper`, or `--backend viet-lyrics`
 for Vietnamese lyrics.
 

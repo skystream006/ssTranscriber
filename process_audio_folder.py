@@ -1,11 +1,16 @@
 import argparse
+import json
+import subprocess
 import sys
+import uuid
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import backends
 from transcribe_common import (
     LOG_PATH,
+    REPO_ROOT,
     ROOT,
     TEMP_DIR,
     TRANSCRIPTS_DIR,
@@ -23,8 +28,56 @@ from transcribe_common import (
     prompt_for_device,
     resolve_device,
     separate_vocals,
-    write_lyrics_to_file,
+    write_transcript_file,
 )
+
+
+def _start_viet_lyrics_worker(model_name: str, device: str):
+    # Runs in its own process; see viet_lyrics_worker.py for why this must
+    # not share a process with the primary faster-whisper (CTranslate2) model.
+    return subprocess.Popen(
+        [sys.executable, str(REPO_ROOT / 'viet_lyrics_worker.py'), '--model', model_name, '--device', device],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding='utf-8',
+        errors='replace',
+        bufsize=1,
+    )
+
+
+def _transcribe_with_viet_lyrics_worker(worker, audio_path: Path, language, label: str):
+    result_path = TEMP_DIR / f'viet_lyrics_result_{uuid.uuid4().hex}.json'
+    request = {
+        'audio_path': str(audio_path),
+        'language': language,
+        'label': label,
+        'result_path': str(result_path),
+    }
+    worker.stdin.write(json.dumps(request) + '\n')
+    worker.stdin.flush()
+    while True:
+        line = worker.stdout.readline()
+        if line == '':
+            raise RuntimeError('viet-lyrics fallback worker exited unexpectedly')
+        line = line.rstrip('\n')
+        if line.startswith('__ASR_RESULT__:'):
+            status = line[len('__ASR_RESULT__:'):]
+            break
+        print(line, flush=True)  # pass through the worker's own log output
+    try:
+        if status.startswith('ERROR:'):
+            raise RuntimeError(status[len('ERROR:'):])
+        payload = json.loads(result_path.read_text(encoding='utf-8'))
+    finally:
+        result_path.unlink(missing_ok=True)
+    segments = [
+        SimpleNamespace(start=float(item['start']), end=float(item['end']), text=item['text'])
+        for item in payload['segments']
+    ]
+    info = SimpleNamespace(language=payload.get('language'))
+    return segments, info
 
 
 def main():
@@ -105,8 +158,9 @@ def main():
         '--fallback-viet-lyrics',
         action='store_true',
         help=(
-            'When the --opening-threshold retry triggers, transcribe the retry pass with the '
-            'viet-lyrics backend instead of re-running the primary --backend/--model.'
+            'When the --opening-threshold retry triggers, run a 3rd transcription pass with the '
+            'viet-lyrics backend (on the separated vocals) after the primary --backend/--model '
+            'retry on the original audio, instead of stopping at that one retry.'
         ),
     )
     parser.add_argument(
@@ -128,7 +182,7 @@ def main():
     else:
         device = resolve_device(args.device)
     log_progress(f'Using device: {device}')
-    print_available_models(args.backend, args.model, backends.AVAILABLE_MODELS)
+    print_available_models(args.backend, args.model, backends.get_models(args.backend))
 
     results = []
     log_progress(f'Scanning for audio files under {ROOT}')
@@ -160,7 +214,7 @@ def main():
         log_progress(f'Failed to load {args.backend} model "{args.model}": {load_error}')
         raise
     log_progress(f'Model loaded; starting transcription with {args.backend} model "{args.model}"')
-    fallback_model = None
+    fallback_worker = None
     for idx, path in enumerate(files, 1):
         file_start = datetime.now()
         log_progress(f'[{idx}/{len(files)}] {path.name} — processing started using model "{args.model}"')
@@ -186,6 +240,22 @@ def main():
                 model, transcription_path, args.language, path.name, args.backend
             )
             candidate_segments, _, _ = filter_transcript_segments(segments, allow_promotions=args.keep_promotions)
+
+            # Persist the first-pass transcript immediately so a slow/crashing retry
+            # (e.g. the viet-lyrics fallback worker) never loses it.
+            relative_path = path.relative_to(ROOT).with_suffix('.txt')
+            transcript_path = TRANSCRIPTS_DIR / relative_path
+            transcript_path.parent.mkdir(parents=True, exist_ok=True)
+            initial_transcript = '\n'.join(
+                segment.text.strip() for segment in candidate_segments if segment.text.strip()
+            ).strip()
+            if initial_transcript:
+                initial_sylt_entries = build_sylt_entries(candidate_segments)
+                write_transcript_file(
+                    transcript_path,
+                    id3_language(args.language or info.language),
+                    format_sylt_as_lrc(initial_sylt_entries) if initial_sylt_entries else initial_transcript,
+                )
             if (
                 transcription_path != path
                 and (
@@ -204,42 +274,85 @@ def main():
                     fallback_message = (
                         f'{path.name} — no usable vocal segments; retrying transcription'
                     )
-                retry_backend = args.backend
-                retry_model_name = args.model
-                retry_model = model
-                retry_audio_path = path
-                if args.fallback_viet_lyrics:
-                    retry_backend = 'viet-lyrics'
-                    retry_model_name = args.fallback_viet_lyrics_model
-                    retry_audio_path = transcription_path
-                    if fallback_model is None:
-                        log_progress(
-                            f'Loading fallback viet-lyrics model "{retry_model_name}" '
-                            '(first run may download several GB)'
-                        )
-                        with progress_heartbeat(f'Loading fallback viet-lyrics model "{retry_model_name}"'):
-                            fallback_model = backends.load_model(retry_model_name, retry_backend, device)
-                    retry_model = fallback_model
-                    fallback_message += (
-                        f' on the separated vocals using viet-lyrics model "{retry_model_name}"'
-                    )
-                else:
-                    fallback_message += ' on the original audio'
-                log_progress(fallback_message)
+                log_progress(f'{fallback_message} on the original audio')
                 try:
                     segments, info = backends.transcribe_audio(
-                        retry_model, retry_audio_path, args.language, path.name, retry_backend
+                        model, path, args.language, path.name, args.backend
                     )
-                except Exception as fallback_error:
-                    # The retry audio can occasionally fail to decode (e.g. an
+                    # Persist this retry immediately so a crashing viet-lyrics fallback
+                    # pass below never loses it, and keep it in a dedicated sibling file
+                    # so it isn't lost once the fallback pass overwrites the main transcript.
+                    retry_candidate_segments, _, _ = filter_transcript_segments(
+                        segments, allow_promotions=args.keep_promotions
+                    )
+                    retry_sylt_entries = build_sylt_entries(retry_candidate_segments)
+                    retry_transcript = '\n'.join(
+                        segment.text.strip() for segment in retry_candidate_segments if segment.text.strip()
+                    ).strip()
+                    if retry_transcript:
+                        retry_transcript_output = (
+                            format_sylt_as_lrc(retry_sylt_entries) if retry_sylt_entries else retry_transcript
+                        )
+                        retry_language = id3_language(args.language or info.language)
+                        write_transcript_file(transcript_path, retry_language, retry_transcript_output)
+                        original_relative = path.relative_to(ROOT).with_name(f'{path.stem}_original.txt')
+                        original_transcript_path = TRANSCRIPTS_DIR / original_relative
+                        write_transcript_file(original_transcript_path, retry_language, retry_transcript_output)
+                except Exception as original_retry_error:
+                    # The original file can occasionally fail to decode (e.g. an
                     # unusual WAV encoding faster-whisper's loader can't parse)
-                    # even though the first pass read it fine. Keep the transcript
-                    # already produced instead of losing it entirely.
+                    # even though Demucs read it fine. Keep the transcript already
+                    # produced instead of losing it entirely.
                     used_original_fallback = False
                     log_progress(
-                        f'{path.name} — WARNING: could not retry on {retry_audio_path.name} '
-                        f'({fallback_error}); keeping earlier transcript'
+                        f'{path.name} — WARNING: could not retry on {path.name} '
+                        f'({original_retry_error}); keeping earlier transcript'
                     )
+
+                if args.fallback_viet_lyrics:
+                    # Runs after the original-audio retry above, so a fallback run is
+                    # always the third pass (initial + original retry + viet-lyrics).
+                    if fallback_worker is None:
+                        log_progress(
+                            f'Starting isolated viet-lyrics worker process for model '
+                            f'"{args.fallback_viet_lyrics_model}" (first run may download several GB; '
+                            'runs in its own process to avoid a cuDNN conflict with the primary '
+                            'faster-whisper model)'
+                        )
+                        with progress_heartbeat(
+                            f'Loading fallback viet-lyrics model "{args.fallback_viet_lyrics_model}"'
+                        ):
+                            fallback_worker = _start_viet_lyrics_worker(args.fallback_viet_lyrics_model, device)
+                    log_progress(
+                        f'{path.name} — retrying transcription on the separated vocals using '
+                        f'viet-lyrics model "{args.fallback_viet_lyrics_model}" (isolated process)'
+                    )
+                    try:
+                        segments, info = _transcribe_with_viet_lyrics_worker(
+                            fallback_worker, transcription_path, args.language, path.name
+                        )
+                        # Persist this pass immediately too, applying the same
+                        # --keep-promotions filtering as the other two passes.
+                        fallback_candidate_segments, _, _ = filter_transcript_segments(
+                            segments, allow_promotions=args.keep_promotions
+                        )
+                        fallback_sylt_entries = build_sylt_entries(fallback_candidate_segments)
+                        fallback_pass_transcript = '\n'.join(
+                            segment.text.strip() for segment in fallback_candidate_segments if segment.text.strip()
+                        ).strip()
+                        if fallback_pass_transcript:
+                            write_transcript_file(
+                                transcript_path,
+                                id3_language(args.language or info.language),
+                                format_sylt_as_lrc(fallback_sylt_entries)
+                                if fallback_sylt_entries
+                                else fallback_pass_transcript,
+                            )
+                    except Exception as fallback_error:
+                        log_progress(
+                            f'{path.name} — WARNING: viet-lyrics fallback failed on '
+                            f'{transcription_path.name} ({fallback_error}); keeping earlier transcript'
+                        )
             segments, removed_promotions, removed_duplicates = filter_transcript_segments(
                 segments, allow_promotions=args.keep_promotions
             )
@@ -258,26 +371,24 @@ def main():
                 continue
 
             language = id3_language(args.language or info.language)
-            log_progress(f'{path.name} — writing USLT/SYLT metadata and transcript')
-            write_lyrics_to_file(path, transcript, segments, language)
+            log_progress(f'{path.name} — writing transcript')
 
-            # Write transcript as LRC-style synced lyrics, matching the mp3's SYLT frame exactly.
+            # Write transcript as LRC-style synced lyrics, matching what write_lyrics_to_file
+            # would embed as the mp3's SYLT frame. USLT/SYLT embedding itself is a separate,
+            # manually-run step; see embed_lyrics.py.
             sylt_entries = build_sylt_entries(segments)
             transcript_output = format_sylt_as_lrc(sylt_entries) if sylt_entries else transcript
-            relative_path = path.relative_to(ROOT).with_suffix('.txt')
-            transcript_path = TRANSCRIPTS_DIR / relative_path
-            transcript_path.parent.mkdir(parents=True, exist_ok=True)
-            transcript_path.write_text(transcript_output, encoding='utf-8')
+            write_transcript_file(transcript_path, language, transcript_output)
 
-            if used_original_fallback:
-                suffix = '_fallback' if args.fallback_viet_lyrics else '_original'
-                original_relative = path.relative_to(ROOT).with_name(f'{path.stem}{suffix}.txt')
-                original_transcript_path = TRANSCRIPTS_DIR / original_relative
-                original_transcript_path.parent.mkdir(parents=True, exist_ok=True)
-                original_transcript_path.write_text(transcript_output, encoding='utf-8')
-                log_progress(f'{path.name} — wrote retry-pass fallback transcript: {original_transcript_path.name}')
+            if used_original_fallback and args.fallback_viet_lyrics:
+                # The original-audio retry's own result was already saved as
+                # "_original.txt" above; this is the viet-lyrics fallback's result.
+                fallback_relative = path.relative_to(ROOT).with_name(f'{path.stem}_fallback.txt')
+                fallback_transcript_path = TRANSCRIPTS_DIR / fallback_relative
+                write_transcript_file(fallback_transcript_path, language, transcript_output)
+                log_progress(f'{path.name} — wrote viet-lyrics fallback transcript: {fallback_transcript_path.name}')
 
-            status = f'Success (USLT + SYLT embedded, lang={language})'
+            status = f'Success (transcript written, lang={language})'
             results.append((path.name, status))
             elapsed = (datetime.now() - file_start).total_seconds()
             log_progress(f'[{idx}/{len(files)}] {path.name} — {status} ({elapsed:.1f}s)')
@@ -286,6 +397,13 @@ def main():
             results.append((path.name, status))
             elapsed = (datetime.now() - file_start).total_seconds()
             log_progress(f'[{idx}/{len(files)}] {path.name} — {status} ({elapsed:.1f}s)')
+
+    if fallback_worker is not None:
+        try:
+            fallback_worker.stdin.close()
+            fallback_worker.wait(timeout=10)
+        except Exception:
+            fallback_worker.kill()
 
     end_time = datetime.now()
     log_progress('Generating summary')

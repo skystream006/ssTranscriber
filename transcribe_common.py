@@ -182,8 +182,7 @@ def print_devices(devices):
         print('  (no CUDA GPU detected)')
 
 
-def print_available_models(backend: str, selected_model: str, available_models: dict):
-    models = available_models.get(backend, ())
+def print_available_models(backend: str, selected_model: str, models):
     if not models:
         return
     print(colorize(f'Available models for backend "{backend}":', 'blue', bold=True))
@@ -358,6 +357,47 @@ def format_sylt_as_lrc(sylt_entries):
     return '\n'.join(lines)
 
 
+_LANG_HEADER_RE = re.compile(r'^\[lang:([a-z]{2,3})\]$')
+_LRC_LINE_RE = re.compile(r'^\[(\d{2}):(\d{2})\.(\d{2})\](.*)$')
+
+
+def write_transcript_file(path: Path, language: str, transcript_output: str):
+    # Prepends a "[lang:xx]" header so embed_lyrics.py can recover the detected
+    # language from the transcript file alone, without re-running transcription.
+    path.parent.mkdir(parents=True, exist_ok=True)
+    header = f'[lang:{language}]\n' if language else ''
+    path.write_text(header + transcript_output, encoding='utf-8')
+
+
+def read_transcript_file(path: Path):
+    # Inverse of write_transcript_file(): returns (language_or_None, sylt_entries, plain_transcript).
+    lines = path.read_text(encoding='utf-8').splitlines()
+    language = None
+    if lines:
+        header_match = _LANG_HEADER_RE.match(lines[0].strip())
+        if header_match:
+            language = header_match.group(1)
+            lines = lines[1:]
+
+    entries = []
+    plain_lines = []
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line:
+            continue
+        match = _LRC_LINE_RE.match(line)
+        if match:
+            minutes, seconds, centiseconds, lyric = match.groups()
+            start_ms = (int(minutes) * 60 + int(seconds)) * 1000 + int(centiseconds) * 10
+            lyric = lyric.strip()
+            entries.append((lyric, start_ms))
+            plain_lines.append(lyric)
+        else:
+            plain_lines.append(line)
+
+    return language, entries, '\n'.join(plain_lines).strip()
+
+
 def write_lyrics_to_file(path: Path, transcript: str, segments, language='und'):
     try:
         tags = ID3(path)
@@ -413,10 +453,24 @@ def load_transformers_asr_pipeline(model_name: str, device: str, label: str):
         ) from exc
 
 
-def run_transformers_pipeline_transcription(model, path: Path, language, label: str, default_language='und'):
+def run_transformers_pipeline_transcription(
+    model,
+    path: Path,
+    language,
+    label: str,
+    default_language='und',
+    line_pause_threshold=0.6,
+    max_words_per_line=14,
+    max_line_duration=12.0,
+):
     # Shared chunked-ASR-pipeline transcription logic (pho-whisper, viet-lyrics).
+    # Uses word-level timestamps rather than one timestamp per 30s chunk,
+    # since this pipeline (unlike faster-whisper) has no built-in phrase/pause
+    # segmentation; words are then regrouped into lyric-line-sized segments
+    # below using pause gaps, so the transcript/SYLT output isn't one giant
+    # blob of text per chunk.
     kwargs = {
-        'return_timestamps': True,
+        'return_timestamps': 'word',
         'chunk_length_s': 30,
         'stride_length_s': 5,
     }
@@ -424,21 +478,21 @@ def run_transformers_pipeline_transcription(model, path: Path, language, label: 
         kwargs['language'] = language
     result = model(str(path), **kwargs)
 
-    segments = []
+    words = []
     if isinstance(result, dict):
         chunks = result.get('chunks') or []
-        if chunks:
-            for chunk in chunks:
-                text = (chunk.get('text') or '').strip()
-                if not text:
-                    continue
-                start = float(chunk.get('timestamp', (0.0, 0.0))[0])
-                end = float(chunk.get('timestamp', (0.0, 0.0))[1] or start)
-                segments.append(SimpleNamespace(start=start, end=end, text=text))
-        else:
+        for chunk in chunks:
+            text = (chunk.get('text') or '').strip()
+            if not text:
+                continue
+            ts = chunk.get('timestamp') or (0.0, 0.0)
+            start = float(ts[0]) if ts[0] is not None else 0.0
+            end = float(ts[1]) if ts[1] is not None else start
+            words.append((text, start, end))
+        if not words:
             text = (result.get('text') or '').strip()
             if text:
-                segments.append(SimpleNamespace(start=0.0, end=0.0, text=text))
+                words.append((text, 0.0, 0.0))
     elif isinstance(result, list):
         for item in result:
             if isinstance(item, dict):
@@ -446,13 +500,33 @@ def run_transformers_pipeline_transcription(model, path: Path, language, label: 
                 if not text:
                     continue
                 ts = item.get('timestamp') or (0.0, 0.0)
-                start = float(ts[0])
-                end = float(ts[1] or start)
-                segments.append(SimpleNamespace(start=start, end=end, text=text))
+                start = float(ts[0]) if ts[0] is not None else 0.0
+                end = float(ts[1]) if ts[1] is not None else start
+                words.append((text, start, end))
     elif isinstance(result, str):
         text = result.strip()
         if text:
-            segments.append(SimpleNamespace(start=0.0, end=0.0, text=text))
+            words.append((text, 0.0, 0.0))
+
+    segments = []
+    line_words = []
+    line_start = None
+    previous_end = None
+    for text, start, end in words:
+        if line_words and (
+            (previous_end is not None and start - previous_end > line_pause_threshold)
+            or len(line_words) >= max_words_per_line
+            or (line_start is not None and end - line_start > max_line_duration)
+        ):
+            segments.append(SimpleNamespace(start=line_start, end=previous_end, text=' '.join(line_words)))
+            line_words = []
+            line_start = None
+        if line_start is None:
+            line_start = start
+        line_words.append(text)
+        previous_end = end
+    if line_words:
+        segments.append(SimpleNamespace(start=line_start, end=previous_end, text=' '.join(line_words)))
 
     duration = max(float(path.stat().st_size or 0.0), 0.001)
     info = SimpleNamespace(duration=duration, language=language or default_language)
@@ -467,3 +541,4 @@ def run_transformers_pipeline_transcription(model, path: Path, language, label: 
         if last_reported < 100:
             log_progress(f'{label} — transcription 100%')
     return segments, info
+

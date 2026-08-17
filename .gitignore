@@ -3,3 +3,4 @@ output/
 temp/
 .env
 __pycache__/
+backend/__pycache__/
