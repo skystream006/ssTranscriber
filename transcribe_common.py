@@ -81,6 +81,12 @@ PROMOTIONAL_PHRASES = (
     'like và đăng ký',
     'cảm ơn các bạn đã theo dõi',
     'hẹn gặp lại',
+    'please subscribe',
+    'subscribe to the channel',
+    'like and subscribe',
+    'thanks for watching',
+    'thank you for watching',
+    'see you next time',
 )
 
 

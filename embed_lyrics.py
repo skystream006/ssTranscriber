@@ -6,7 +6,7 @@ file under input/, it looks for a transcript file with the same relative path/fi
 (stem) under output/transcripts/ and embeds that transcript's USLT (plain) and SYLT
 (synced) tags into the audio file.
 
-The "_initial.txt"/"_original.txt"/"_fallback.txt" pass-specific sibling files
+The "_1initial.txttxt"/"_2original.txttxt"/"_3fallback.txttxt" pass-specific sibling files
 written by process_audio_folder.py never match an audio filename, so they are naturally
 skipped.
 """
