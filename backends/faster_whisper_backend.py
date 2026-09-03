@@ -1,3 +1,26 @@
+import importlib.util
+import os
+from pathlib import Path
+
+
+def _register_nvidia_dll_directories():
+    if os.name != 'nt' or not hasattr(os, 'add_dll_directory'):
+        return []
+
+    handles = []
+    for package_name in ('nvidia.cublas', 'nvidia.cudnn'):
+        package_spec = importlib.util.find_spec(package_name)
+        if package_spec is None or package_spec.submodule_search_locations is None:
+            continue
+        for package_dir in package_spec.submodule_search_locations:
+            bin_dir = Path(package_dir) / 'bin'
+            if bin_dir.is_dir():
+                handles.append(os.add_dll_directory(str(bin_dir)))
+    return handles
+
+
+_NVIDIA_DLL_DIRECTORY_HANDLES = _register_nvidia_dll_directories()
+
 from faster_whisper import WhisperModel
 
 from transcribe_common import faster_whisper_device, log_progress

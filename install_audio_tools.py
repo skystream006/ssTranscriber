@@ -40,6 +40,7 @@ CUDA_INDEX_URLS = {
     'cu121': 'https://download.pytorch.org/whl/cu121',
     'cu124': 'https://download.pytorch.org/whl/cu124',
     'cu126': 'https://download.pytorch.org/whl/cu126',
+    'cu130': 'https://download.pytorch.org/whl/cu130',
     'cpu': 'https://download.pytorch.org/whl/cpu',
 }
 
@@ -47,7 +48,7 @@ parser = argparse.ArgumentParser(description='Install transcription dependencies
 parser.add_argument(
     '--cuda',
     choices=sorted(CUDA_INDEX_URLS),
-    default='cu121',
+    default='cu124',
     help='PyTorch build to install. Use the CUDA version supported by your NVIDIA driver, or "cpu".',
 )
 parser.add_argument(
@@ -97,6 +98,13 @@ parser.add_argument(
 )
 args = parser.parse_args()
 
+if sys.version_info >= (3, 13) and args.cuda in {'cu118', 'cu121'}:
+    parser.error(
+        f'PyTorch does not provide Python {sys.version_info.major}.{sys.version_info.minor} wheels '
+        f'on the {args.cuda} index. Use --cuda cu124, --cuda cu126, --cuda cu130, or --cuda cpu; '
+        'otherwise run this installer with Python 3.12.'
+    )
+
 torch_command = [
     sys.executable, '-m', 'pip', 'install', '--upgrade',
     'torch', 'torchaudio', 'torchvision',
@@ -121,6 +129,7 @@ commands = [
             sys.executable, '-m', 'pip', 'install', '--upgrade',
             'demucs', 'faster-whisper', 'transformers', 'sentencepiece', 'mutagen', 'huggingface_hub',
             'accelerate', 'librosa', 'soundfile',
+            'nvidia-cublas-cu12==12.8.4.1', 'nvidia-cudnn-cu12==9.10.2.21',
         ],
         'required': True,
         'name': 'install audio dependencies',
@@ -213,7 +222,10 @@ verify_code = (
     'print("cuda_build", torch.version.cuda);'
     'print("cuda_available", torch.cuda.is_available());'
     'print("device_count", torch.cuda.device_count());'
-    '[print("device", i, torch.cuda.get_device_name(i)) for i in range(torch.cuda.device_count())]'
+    '[print("device", i, torch.cuda.get_device_name(i), "capability", torch.cuda.get_device_capability(i)) '
+    'for i in range(torch.cuda.device_count())];'
+    'torch.ones(1, device="cuda").add_(1).cpu() if torch.cuda.is_available() else None;'
+    'print("cuda_kernel_test", "ok" if torch.cuda.is_available() else "skipped")'
 )
 
 

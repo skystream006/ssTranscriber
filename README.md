@@ -18,9 +18,16 @@ runtime and model.
 - [FFmpeg](https://ffmpeg.org/) on `PATH`
 - Optional: an NVIDIA GPU with a matching CUDA driver for faster transcription
 
+Python 3.13 users must select `cu124`, `cu126`, `cu130`, or `cpu`; PyTorch does not publish Python 3.13
+wheels on its older `cu118` and `cu121` indexes.
+
+RTX 50-series GPUs require a PyTorch build with Blackwell support. Use `--cuda cu130` with an
+NVIDIA driver that reports CUDA 13.0 or newer in `nvidia-smi`.
+
 ## Setup
 
 ```powershell
+python .\initialize_project.py
 python .\install_audio_tools.py --cuda cu124
 ```
 
@@ -57,10 +64,12 @@ visible. `torch`/`torchaudio`/`torchvision` are always installed together from t
 index so they stay version-matched — a mismatched `torchvision` build (e.g. left over from an
 earlier `torch` upgrade) causes `transformers.pipeline(...)` to fail with
 `RuntimeError: operator torchvision::nms does not exist` when loading the `pho-whisper` backend.
+On Windows, the installer also provides CUDA 12.8 cuBLAS and cuDNN 9 runtime DLLs required by
+Faster-Whisper's CTranslate2 backend, including on RTX 50-series GPUs using PyTorch `cu130`.
 `accelerate`/`librosa`/`soundfile` are required for the `pho-whisper` backend, which loads
 PhoWhisper checkpoints through `transformers.pipeline(...)` (there is no `pho-whisper` PyPI
 package). Pick the `--cuda` value matching your NVIDIA driver
-(`cu118`, `cu121`, `cu124`, `cu126`), or use `--cpu` builds via `--cuda cpu`. A full log is
+(`cu118`, `cu121`, `cu124`, `cu126`, `cu130`), or use `--cpu` builds via `--cuda cpu`. A full log is
 written to `output/install_audio_tools.log`.
 
 Existing packages that already satisfy the requested versions are retained. Use
