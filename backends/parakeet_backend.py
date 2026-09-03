@@ -8,6 +8,14 @@ MODELS = (
     'nvidia/canary-1b',
 )
 
+TIMESTAMPS = True
+# TIMESTAMPS: Request segment or word timestamps from NeMo. Must remain True for synchronized lyrics.
+NUM_WORKERS = 0
+# NUM_WORKERS: DataLoader worker processes used during transcription. Larger values may improve
+# throughput but can race on NeMo's temporary manifest on Windows; zero uses the reliable main process.
+DEFAULT_LANGUAGE = 'en'
+# DEFAULT_LANGUAGE: Language recorded when no language is supplied. Parakeet models default to English.
+
 
 def load(model_name: str, device: str):
     try:
@@ -27,25 +35,17 @@ def load(model_name: str, device: str):
 
 
 def transcribe(model, path, language, label: str):
-    # NeMo's transcribe() writes its own internal manifest.json into a
-    # fresh temp directory on every call and immediately reads it back
-    # via a DataLoader. On Windows, if that DataLoader uses worker
-    # processes (num_workers > 0, the default), those workers can try to
-    # reopen the manifest before the main process's write is flushed,
-    # causing a deterministic WinError 32 (a new temp dir fails every
-    # time, not just occasionally). Forcing num_workers=0 keeps everything
-    # single-process and avoids the race; the retry wrapper remains as a
-    # safety net for any other transient lock (e.g. antivirus scanning).
-    # num_workers=0 is applied unconditionally (not via inspect.signature)
-    # because decorators used inside NeMo can hide the real parameter
-    # list, which previously caused the guard to silently skip it.
     def _transcribe_parakeet():
         try:
-            return model.transcribe([str(path)], timestamps=True, num_workers=0)
+            return model.transcribe(
+                [str(path)],
+                timestamps=TIMESTAMPS,
+                num_workers=NUM_WORKERS,
+            )
         except TypeError as exc:
             if 'num_workers' not in str(exc):
                 raise
-            return model.transcribe([str(path)], timestamps=True)
+            return model.transcribe([str(path)], timestamps=TIMESTAMPS)
 
     hypotheses = retry_on_windows_file_lock(_transcribe_parakeet, label=label)
     hypothesis = hypotheses[0] if hypotheses else None
@@ -69,7 +69,7 @@ def transcribe(model, path, language, label: str):
             segments.append(SimpleNamespace(start=0.0, end=0.0, text=text))
 
     duration = max(float(path.stat().st_size or 0.0), 0.001)
-    info = SimpleNamespace(duration=duration, language=language or 'en')
+    info = SimpleNamespace(duration=duration, language=language or DEFAULT_LANGUAGE)
     if segments:
         log_progress(f'{label} — transcription 100%')
     return segments, info

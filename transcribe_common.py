@@ -466,9 +466,11 @@ def run_transformers_pipeline_transcription(
     label: str,
     default_language='und',
     chunk_length_s=30,
+    stride_length_s=5,
     line_pause_threshold=0.6,
     max_words_per_line=14,
     max_line_duration=12.0,
+    generation_kwargs=None,
 ):
     # Shared chunked-ASR-pipeline transcription logic (pho-whisper, viet-lyrics).
     # Uses word-level timestamps rather than one timestamp per 30s chunk,
@@ -479,8 +481,9 @@ def run_transformers_pipeline_transcription(
     kwargs = {
         'return_timestamps': 'word',
         'chunk_length_s': chunk_length_s,
-        'stride_length_s': 5,
+        'stride_length_s': stride_length_s,
     }
+    kwargs.update(generation_kwargs or {})
     if language:
         kwargs['language'] = language
     result = model(str(path), **kwargs)

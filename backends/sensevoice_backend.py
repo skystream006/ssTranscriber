@@ -6,11 +6,24 @@ MODELS = (
     'FunAudioLLM/SenseVoiceSmall',
 )
 
-# SenseVoice was only trained on Chinese, Cantonese, English, Japanese, and
-# Korean. Requesting any other language (e.g. Vietnamese) silently produces
-# hallucinated text in one of those trained languages instead of failing,
-# so this is rejected explicitly rather than returning garbage output.
 SUPPORTED_LANGUAGES = {'auto', 'zh', 'yue', 'en', 'ja', 'ko'}
+# SUPPORTED_LANGUAGES: Languages SenseVoice was trained to recognize. Other languages are rejected
+# because they can silently produce hallucinated text in one of the supported languages.
+MODEL_HUB = 'hf'
+# MODEL_HUB: Repository service used to resolve the model ID. "hf" selects Hugging Face.
+VAD_MODEL = 'fsmn-vad'
+# VAD_MODEL: Voice-activity model used to split speech from silence before recognition.
+MAX_SINGLE_SEGMENT_TIME_MS = 30000
+# MAX_SINGLE_SEGMENT_TIME_MS: Maximum VAD segment duration in milliseconds. Larger values retain more
+# context but use more memory; smaller values split audio more often and can divide phrases.
+DEFAULT_LANGUAGE = 'auto'
+# DEFAULT_LANGUAGE: Language used when none is supplied. "auto" asks SenseVoice to detect it.
+USE_ITN = True
+# USE_ITN: Enable inverse text normalization. True formats spoken numbers and dates as written text;
+# False preserves a more literal transcription.
+BATCH_SIZE_S = 60
+# BATCH_SIZE_S: Approximate seconds of audio processed per batch. Larger values improve throughput but
+# use more memory; smaller values reduce memory use but increase batching overhead.
 
 
 def load(model_name: str, device: str):
@@ -28,9 +41,9 @@ def load(model_name: str, device: str):
     # with "model '<id>' is not registered".
     return AutoModel(
         model=model_name,
-        hub='hf',
-        vad_model='fsmn-vad',
-        vad_kwargs={'max_single_segment_time': 30000},
+        hub=MODEL_HUB,
+        vad_model=VAD_MODEL,
+        vad_kwargs={'max_single_segment_time': MAX_SINGLE_SEGMENT_TIME_MS},
         device=device_str,
     )
 
@@ -45,9 +58,9 @@ def transcribe(model, path, language, label: str):
     results = model.generate(
         input=str(path),
         cache={},
-        language=language or 'auto',
-        use_itn=True,
-        batch_size_s=60,
+        language=language or DEFAULT_LANGUAGE,
+        use_itn=USE_ITN,
+        batch_size_s=BATCH_SIZE_S,
     )
     segments = []
     for item in results or []:
@@ -68,7 +81,7 @@ def transcribe(model, path, language, label: str):
         segments.append(SimpleNamespace(start=start, end=end, text=text))
 
     duration = max(float(path.stat().st_size or 0.0), 0.001)
-    info = SimpleNamespace(duration=duration, language=language or 'auto')
+    info = SimpleNamespace(duration=duration, language=language or DEFAULT_LANGUAGE)
     if segments:
         log_progress(f'{label} — transcription 100%')
     return segments, info

@@ -1,0 +1,24 @@
+{
+    "chat.tools.terminal.autoApprove": {
+        "/^python -m pip index versions torch --index-url https://download\\.pytorch\\.org/whl/cu121$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^python -m pip index versions torch --index-url https://download\\.pytorch\\.org/whl/cu124$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^python -m pip index versions torch --index-url https://download\\.pytorch\\.org/whl/cu126$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^python -m py_compile \\.\\\\install_audio_tools\\.py$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^python \\.\\\\install_audio_tools\\.py --cuda cu121$/": {
+            "approve": true,
+            "matchCommandLine": true
+        }
+    }
+}
