@@ -5,6 +5,7 @@ MODELS = (
     'kelvinbksoh/whisper-medium-vietnamese-lyrics-transcription',
     'kelvinbksoh/whisper-large-v2-vietnamese-lyrics-transcription',
 )
+CHUNK_LENGTH_S = 30
 
 
 def load(model_name: str, device: str):
@@ -14,4 +15,11 @@ def load(model_name: str, device: str):
 
 
 def transcribe(model, path, language, label: str):
-    return run_transformers_pipeline_transcription(model, path, language, label, default_language='vi')
+    return run_transformers_pipeline_transcription(
+        model,
+        path,
+        language,
+        label,
+        default_language='vi',
+        chunk_length_s=CHUNK_LENGTH_S,
+    )

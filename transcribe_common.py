@@ -465,6 +465,7 @@ def run_transformers_pipeline_transcription(
     language,
     label: str,
     default_language='und',
+    chunk_length_s=30,
     line_pause_threshold=0.6,
     max_words_per_line=14,
     max_line_duration=12.0,
@@ -477,7 +478,7 @@ def run_transformers_pipeline_transcription(
     # blob of text per chunk.
     kwargs = {
         'return_timestamps': 'word',
-        'chunk_length_s': 30,
+        'chunk_length_s': chunk_length_s,
         'stride_length_s': 5,
     }
     if language:
