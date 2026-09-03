@@ -24,6 +24,38 @@ MAX_LINE_DURATION = 12.0
 # MAX_LINE_DURATION: Maximum duration in seconds for one lyric line. Larger values permit longer
 # lines; smaller values split phrases sooner for more frequent synchronized-lyrics updates.
 
+GENERATION_KWARGS = {
+    'task': 'transcribe',
+    # task: Preserve speech in its original language. Use "translate" to generate English text.
+    'num_beams': 1,
+    # num_beams: Candidate sequences retained during beam search. Larger values may improve accuracy
+    # but increase decoding time and GPU memory; smaller values are faster. Must be a positive integer.
+    'condition_on_prev_tokens': False,
+    # condition_on_prev_tokens: Feed previous chunk text into the next chunk. True improves continuity
+    # but can propagate repetition; False isolates chunks and reduces repeated or contaminated text.
+    'repetition_penalty': 1.1,
+    # repetition_penalty: Penalize previously generated tokens. Larger values suppress repetition more
+    # aggressively but can remove repeated lyrics; values nearer 1.0 preserve intentional repetition.
+    'no_repeat_ngram_size': 3,
+    # no_repeat_ngram_size: Block repeated token groups of this size. Smaller positive values block
+    # short patterns more aggressively; larger values only block longer phrases. Zero disables it.
+    'temperature': 0.0,
+    # temperature: Sampling randomness. Larger values produce more varied, less predictable text;
+    # smaller values are more deterministic. Zero uses deterministic decoding.
+    'no_speech_threshold': 0.3,
+    # no_speech_threshold: Treat a chunk as silence above this probability when confidence is low.
+    # Smaller values skip audio more aggressively; larger values retain more quiet audio. None disables it.
+    'logprob_threshold': -5.0,
+    # logprob_threshold: Retry or reject decoding below this average token log probability. Larger values
+    # are stricter; smaller/more-negative values accept lower-confidence singing. None disables it.
+    'compression_ratio_threshold': 2.4,
+    # compression_ratio_threshold: Retry text above this repetition/compression ratio. Smaller values
+    # reject repetition more aggressively; larger values tolerate more repetitive output. None disables it.
+    'max_new_tokens': 440,
+    # max_new_tokens: Maximum generated tokens per chunk. Larger values allow longer text but use more
+    # time and memory; smaller values finish sooner but can truncate output. Keep below Whisper's limit.
+}
+
 
 def load(model_name: str, device: str):
     try:
@@ -55,4 +87,5 @@ def transcribe(model, path, language, label: str):
         line_pause_threshold=LINE_PAUSE_THRESHOLD,
         max_words_per_line=MAX_WORDS_PER_LINE,
         max_line_duration=MAX_LINE_DURATION,
+        generation_kwargs=GENERATION_KWARGS,
     )

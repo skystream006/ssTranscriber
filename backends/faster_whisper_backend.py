@@ -41,7 +41,7 @@ MODEL_KWARGS = {
     'cpu_threads': 0,
     # cpu_threads: Number of CPU threads used per worker. Larger values can speed CPU inference but use
     # more CPU resources; smaller values reduce contention. Zero chooses automatically.
-    'num_workers': 1,
+    'num_workers': 5,
     # num_workers: Number of concurrent transcription workers sharing this model instance. Larger values
     # improve parallel throughput but consume more memory; smaller values use fewer resources.
     'download_root': None,
