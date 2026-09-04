@@ -31,7 +31,7 @@ def load(model_name: str, device: str):
         from funasr import AutoModel
     except ImportError as exc:
         raise RuntimeError(
-            'FunASR is not installed. Run install_audio_tools.py --with-sensevoice '
+            'FunASR is not installed. Run _install_audio_tools.py --with-sensevoice '
             'or pip install funasr modelscope.'
         ) from exc
     device_str = 'cuda:0' if device.startswith('cuda') else 'cpu'

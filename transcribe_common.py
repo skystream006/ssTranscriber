@@ -583,7 +583,7 @@ def load_transformers_asr_pipeline(model_name: str, device: str, label: str):
         from transformers import pipeline
     except ImportError as exc:
         raise RuntimeError(
-            f'transformers import failed ({exc}). Run install_audio_tools.py '
+            f'transformers import failed ({exc}). Run _install_audio_tools.py '
             'or pip install transformers accelerate.'
         ) from exc
     device_id = 0 if device.startswith('cuda') else -1

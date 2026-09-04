@@ -28,7 +28,7 @@ NVIDIA driver that reports CUDA 13.0 or newer in `nvidia-smi`.
 
 ```powershell
 python .\_initialize_project.py
-python .\install_audio_tools.py --cuda cu124
+python .\_install_audio_tools.py --cuda cu130
 ```
 
 ### Hugging Face token (optional)
@@ -40,25 +40,25 @@ your token:
 HF_TOKEN=hf_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 ```
 
-Both `install_audio_tools.py` and `process_audio_folder.py` load `.env` automatically (no extra
+Both `_install_audio_tools.py` and `process_audio_folder.py` load `.env` automatically (no extra
 dependency required) and export it as `HF_TOKEN`/`HUGGING_FACE_HUB_TOKEN` before contacting
 Hugging Face. `.env` is git-ignored, so your token is never committed.
 
 If you also want to validate PhoWhisper availability on Hugging Face during setup:
 
 ```powershell
-python .\install_audio_tools.py --cuda cu124 --with-phowhisper --pho-model vinai/PhoWhisper-large
+python .\_install_audio_tools.py --cuda cu124 --with-phowhisper --pho-model vinai/PhoWhisper-large
 ```
 
 Other optional backends can be installed the same way:
 
 ```powershell
-python .\install_audio_tools.py --cuda cu124 --with-parakeet --parakeet-model nvidia/parakeet-tdt-0.6b-v2
-python .\install_audio_tools.py --cuda cu124 --with-sensevoice --sensevoice-model FunAudioLLM/SenseVoiceSmall
-python .\install_audio_tools.py --cuda cu124 --with-viet-lyrics --viet-lyrics-model kelvinbksoh/whisper-large-v2-vietnamese-lyrics-transcription
+python .\_install_audio_tools.py --cuda cu124 --with-parakeet --parakeet-model nvidia/parakeet-tdt-0.6b-v2
+python .\_install_audio_tools.py --cuda cu124 --with-sensevoice --sensevoice-model FunAudioLLM/SenseVoiceSmall
+python .\_install_audio_tools.py --cuda cu124 --with-viet-lyrics --viet-lyrics-model kelvinbksoh/whisper-large-v2-vietnamese-lyrics-transcription
 ```
 
-`install_audio_tools.py` installs `torch`, `torchaudio`, `torchvision`, `demucs`, `faster-whisper`,
+`_install_audio_tools.py` installs `torch`, `torchaudio`, `torchvision`, `demucs`, `faster-whisper`,
 `transformers`, `accelerate`, `librosa`, `soundfile`, and `mutagen`, then prints whether CUDA is
 visible. `torch`/`torchaudio`/`torchvision` are always installed together from the same CUDA
 index so they stay version-matched — a mismatched `torchvision` build (e.g. left over from an
@@ -70,13 +70,50 @@ Faster-Whisper's CTranslate2 backend, including on RTX 50-series GPUs using PyTo
 PhoWhisper checkpoints through `transformers.pipeline(...)` (there is no `pho-whisper` PyPI
 package). Pick the `--cuda` value matching your NVIDIA driver
 (`cu118`, `cu121`, `cu124`, `cu126`, `cu130`), or use `--cpu` builds via `--cuda cpu`. A full log is
-written to `output/install_audio_tools.log`.
+written to `output/_install_audio_tools.log`.
 
 Existing packages that already satisfy the requested versions are retained. Use
 `--force-reinstall` only to repair a broken installation or replace an incorrect PyTorch build.
 
 If `cuda_available` prints `False` while `nvidia-smi` shows your GPU, you have a CPU-only or
 mismatched PyTorch build — rerun with a different `--cuda` value.
+
+## Local Web UI
+
+The optional local interface uses FastAPI for queued CLI subprocess jobs and React/Vite for the
+browser client. Jobs run one at a time to avoid competing for GPU memory. The API process does not
+import Torch or the ASR runtimes; each job still executes `process_audio_folder.py` in an isolated
+Python subprocess.
+
+Initialize its Python and Node dependencies and build the production bundle once:
+
+```powershell
+python .\_initialize_web_api.py
+```
+
+The default port is `8000`. To choose another port, pass it during initialization; the script
+stores `WEB_API_PORT` in the git-ignored `.env` file and prints the resulting URL:
+
+```powershell
+python .\_initialize_web_api.py --port 8765
+```
+
+Start the combined production server and open the URL printed by the initializer:
+
+```powershell
+python .\web_api.py
+```
+
+For frontend development, run the API and Vite in separate terminals. Vite proxies `/api` to the
+local FastAPI server:
+
+```powershell
+python .\web_api.py --reload
+npm --prefix .\webui run dev
+```
+
+The API binds to localhost by default. Job state is held in memory and resets when the API server
+restarts; transcript files and archived output remain on disk.
 
 ## Usage
 
@@ -170,8 +207,8 @@ Common built-in model lists:
 
 - `faster-whisper`: `tiny`, `base`, `small`, `medium`, `large-v2`, `large-v3`, `large-v3-turbo`, `distil-large-v2`, `distil-large-v3`
 - `pho-whisper`: `vinai/PhoWhisper-small`, `vinai/PhoWhisper-base`, `vinai/PhoWhisper-large`
-- `parakeet`: `nvidia/parakeet-tdt-0.6b-v2`, `nvidia/parakeet-tdt-1.1b`, `nvidia/canary-1b` (requires `install_audio_tools.py --with-parakeet`)
-- `sensevoice`: `FunAudioLLM/SenseVoiceSmall` (requires `install_audio_tools.py --with-sensevoice`; only supports `zh`, `yue`, `en`, `ja`, `ko` — no Vietnamese)
+- `parakeet`: `nvidia/parakeet-tdt-0.6b-v2`, `nvidia/parakeet-tdt-1.1b`, `nvidia/canary-1b` (requires `_install_audio_tools.py --with-parakeet`)
+- `sensevoice`: `FunAudioLLM/SenseVoiceSmall` (requires `_install_audio_tools.py --with-sensevoice`; only supports `zh`, `yue`, `en`, `ja`, `ko` — no Vietnamese)
 - `viet-lyrics`: `kelvinbksoh/whisper-small-vietnamese-lyrics-transcription`, `kelvinbksoh/whisper-medium-vietnamese-lyrics-transcription`, `kelvinbksoh/whisper-large-v2-vietnamese-lyrics-transcription` (Whisper fine-tuned specifically on Vietnamese song lyrics; loads through `transformers.pipeline(...)` like `pho-whisper`, but as an independent backend)
 
 Supported extensions: `.mp3`, `.wav`, `.flac`, `.m4a`, `.aac`, `.ogg`, `.opus`, `.wma`.

@@ -22,7 +22,7 @@ def load(model_name: str, device: str):
         from nemo.collections.asr.models import ASRModel
     except ImportError as exc:
         raise RuntimeError(
-            'NeMo toolkit is not installed. Run install_audio_tools.py --with-parakeet '
+            'NeMo toolkit is not installed. Run _install_audio_tools.py --with-parakeet '
             'or pip install "nemo_toolkit[asr]".'
         ) from exc
     model = retry_on_windows_file_lock(

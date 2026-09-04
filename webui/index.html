@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#050505" />
+    <title>ssTranscriber</title>
+    <script>
+      try {
+        const savedTheme = localStorage.getItem('ss-transcriber-theme')
+        const themes = ['light', 'dark', 'royal-blue', 'royal-purple', 'black', 'yellow']
+        const theme = themes.includes(savedTheme) ? savedTheme : 'black'
+        document.documentElement.dataset.theme = theme
+        document.documentElement.dataset.mode = theme === 'light' || theme === 'yellow' ? 'light' : 'dark'
+      } catch {
+        document.documentElement.dataset.theme = 'black'
+        document.documentElement.dataset.mode = 'dark'
+      }
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

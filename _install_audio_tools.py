@@ -8,7 +8,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent
 OUTPUT_DIR = REPO_ROOT / 'output'
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-log_path = OUTPUT_DIR / 'install_audio_tools.log'
+log_path = OUTPUT_DIR / '_install_audio_tools.log'
 
 
 def load_dotenv(path: Path):

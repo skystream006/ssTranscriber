@@ -12,11 +12,11 @@
             "approve": true,
             "matchCommandLine": true
         },
-        "/^python -m py_compile \\.\\\\install_audio_tools\\.py$/": {
+        "/^python -m py_compile \\.\\\\_install_audio_tools\\.py$/": {
             "approve": true,
             "matchCommandLine": true
         },
-        "/^python \\.\\\\install_audio_tools\\.py --cuda cu121$/": {
+        "/^python \\.\\\\_install_audio_tools\\.py --cuda cu121$/": {
             "approve": true,
             "matchCommandLine": true
         }
