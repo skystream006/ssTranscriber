@@ -120,7 +120,14 @@ JSON. Enabling **Viet Lyrics fallback pass** adds an independent **Fallback prof
 isolated fallback worker. Nested objects are merged with the displayed defaults, unknown top-level
 option groups are rejected, and **Reset defaults** restores the profile for the selected backend.
 
-The **Music** workspace plays supported audio directly from `input/`. For MP3 files containing an
+The **Configurations** panel stores named transcription setups in the current browser, including
+both backend profile editors. A saved setup can be marked as the startup default. Audio selection
+is intentionally excluded so loading a configuration cannot silently target an old file.
+The navigation sidebar and transcription form can be collapsed independently. Successfully queueing
+a job collapses the form automatically so **Live activity** uses the available workspace and height.
+
+The **Music** workspace groups and plays supported audio from `input/` and generated tracks from
+`output/songs/`. For MP3 files containing an
 ID3 `SYLT` frame with absolute-millisecond timestamps, the lyric timeline follows playback and each
 line can be selected to seek to its timestamp. Files without embedded `SYLT` lyrics still play.
 Transcription jobs started from the Web UI automatically embed their final transcript as `USLT` and
@@ -206,6 +213,7 @@ python .\process_audio_folder.py --device cuda:0 --backend viet-lyrics --model k
 | `--no-vocal-separation` | flag | off | Bypasses Demucs and transcribes the original audio. |
 | `--demucs-mp3` | flag | off | Writes the Demucs-separated vocals stem as MP3 instead of WAV. |
 | `--demucs-mp3-bitrate` | kbps (int) | `320` | MP3 bitrate used when `--demucs-mp3` is set. |
+| `--copy-no-vocals` | flag | off | With `--demucs-mp3`, copies the accompaniment to `output/songs/[NoVocals] <name>.mp3` and embeds the same USLT/SYLT lyrics as the source. |
 | `--file` | relative path under `input/` | all supported files | Processes a single selected audio file. |
 | `--keep-promotions` | flag | off | Keeps known promotional phrases instead of stripping them out. |
 | `--no-lyric-prompt` | flag | off | Ignores matching files under `input/lyrics/` and overrides `--lyrics-mode`. |

@@ -552,7 +552,7 @@ def read_transcript_file(path: Path):
     return language, entries, '\n'.join(plain_lines).strip()
 
 
-def write_lyrics_to_file(path: Path, transcript: str, segments, language='und'):
+def write_lyrics_to_file(path: Path, transcript: str, segments, language='und', uslt_source_path=None):
     try:
         tags = ID3(path)
     except Exception:
@@ -561,7 +561,7 @@ def write_lyrics_to_file(path: Path, transcript: str, segments, language='und'):
     tags.delall('USLT')
     tags.delall('SYLT')
 
-    lyrics_path = ROOT / 'lyrics' / f'{path.stem}.txt'
+    lyrics_path = ROOT / 'lyrics' / f'{(uslt_source_path or path).stem}.txt'
     uslt_text = transcript
     if lyrics_path.is_file():
         matched_lyrics = lyrics_path.read_text(encoding='utf-8-sig').strip()

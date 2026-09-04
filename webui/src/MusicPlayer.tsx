@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { FileAudio, Music2, Pause, Play, RefreshCw, Volume2 } from 'lucide-react'
+import { ChevronDown, FileAudio, Music2, Pause, Play, RefreshCw, Volume2 } from 'lucide-react'
 
 type LyricEntry = {
   text: string
@@ -14,13 +14,21 @@ type LyricsResponse = {
 
 type LyricsMode = 'sylt' | 'uslt'
 
+type MusicFile = {
+  library: string
+  group: string
+  path: string
+  name: string
+}
+
 type MusicPlayerProps = {
-  files: string[]
+  files: MusicFile[]
   onRefresh: () => Promise<void>
 }
 
-function apiPath(prefix: string, file: string) {
-  return `${prefix}/${file.split('/').map(encodeURIComponent).join('/')}`
+function apiPath(prefix: string, file: MusicFile) {
+  const path = file.path.split('/').map(encodeURIComponent).join('/')
+  return `${prefix}/${encodeURIComponent(file.library)}/${path}`
 }
 
 function durationLabel(seconds: number) {
@@ -31,7 +39,7 @@ function durationLabel(seconds: number) {
 }
 
 export default function MusicPlayer({ files, onRefresh }: MusicPlayerProps) {
-  const [selectedFile, setSelectedFile] = useState('')
+  const [selectedFile, setSelectedFile] = useState<MusicFile | null>(null)
   const [lyrics, setLyrics] = useState<LyricEntry[]>([])
   const [uslt, setUslt] = useState('')
   const [lyricsMode, setLyricsMode] = useState<LyricsMode>('sylt')
@@ -47,8 +55,8 @@ export default function MusicPlayer({ files, onRefresh }: MusicPlayerProps) {
 
   useEffect(() => {
     if (!files.length) {
-      setSelectedFile('')
-    } else if (!files.includes(selectedFile)) {
+      setSelectedFile(null)
+    } else if (!selectedFile || !files.some((file) => file.library === selectedFile.library && file.path === selectedFile.path)) {
       setSelectedFile(files[0])
     }
   }, [files, selectedFile])
@@ -65,7 +73,7 @@ export default function MusicPlayer({ files, onRefresh }: MusicPlayerProps) {
 
     const controller = new AbortController()
     setLyricsLoading(true)
-    fetch(apiPath('/api/audio-lyrics', selectedFile), { signal: controller.signal })
+    fetch(apiPath('/api/music-lyrics', selectedFile), { signal: controller.signal })
       .then(async (response) => {
         if (!response.ok) throw new Error(`Unable to read synchronized lyrics (${response.status})`)
         return response.json() as Promise<LyricsResponse>
@@ -83,6 +91,13 @@ export default function MusicPlayer({ files, onRefresh }: MusicPlayerProps) {
 
     return () => controller.abort()
   }, [selectedFile])
+
+  const groupedFiles = Object.entries(
+    files.reduce<Record<string, MusicFile[]>>((groups, file) => {
+      ;(groups[file.group] ??= []).push(file)
+      return groups
+    }, {}),
+  )
 
   const activeIndex = lyrics.findLastIndex((entry) => entry.time_ms <= currentTime * 1000)
 
@@ -123,12 +138,17 @@ export default function MusicPlayer({ files, onRefresh }: MusicPlayerProps) {
           <button className="icon-button" type="button" title="Refresh audio files" aria-label="Refresh audio files" onClick={() => void onRefresh()}><RefreshCw /></button>
         </div>
         <div className="track-list">
-          {files.map((file) => (
-            <button key={file} type="button" className={selectedFile === file ? 'selected' : ''} onClick={() => setSelectedFile(file)}>
-              <span className="track-icon"><FileAudio /></span>
-              <span><strong>{file.split('/').at(-1)}</strong><small>{file.includes('/') ? file.split('/').slice(0, -1).join('/') : 'input/'}</small></span>
-              {selectedFile === file && playing && <span className="playing-bars" aria-label="Playing"><i /><i /><i /></span>}
-            </button>
+          {groupedFiles.map(([group, groupFiles]) => (
+            <details className="track-group" key={group} open>
+              <summary className="track-group-heading"><span>{group}</span><small>{groupFiles.length}</small><ChevronDown /></summary>
+              {groupFiles.map((file) => (
+                <button key={`${file.library}:${file.path}`} type="button" className={selectedFile?.library === file.library && selectedFile.path === file.path ? 'selected' : ''} onClick={() => setSelectedFile(file)}>
+                  <span className="track-icon"><FileAudio /></span>
+                  <span><strong>{file.name}</strong><small>{file.library}/{file.path.split('/').slice(0, -1).join('/')}</small></span>
+                  {selectedFile?.library === file.library && selectedFile.path === file.path && playing && <span className="playing-bars" aria-label="Playing"><i /><i /><i /></span>}
+                </button>
+              ))}
+            </details>
           ))}
           {!files.length && <div className="empty-state"><Music2 /><h3>No audio files found</h3><p>Add music under input/ and refresh.</p></div>}
         </div>
@@ -137,7 +157,7 @@ export default function MusicPlayer({ files, onRefresh }: MusicPlayerProps) {
       <section className="music-player-panel">
         <div className="now-playing">
           <span className="album-mark"><Music2 /></span>
-          <div><span className="eyebrow">Now playing</span><h2>{selectedFile?.split('/').at(-1) ?? 'Select a track'}</h2><p>{selectedFile || 'Audio from input/'}</p></div>
+          <div><span className="eyebrow">Now playing</span><h2>{selectedFile?.name ?? 'Select a track'}</h2><p>{selectedFile ? `${selectedFile.library}/${selectedFile.path}` : 'Audio from input/ and output/songs/'}</p></div>
           {language && <span className="language-tag">{language}</span>}
         </div>
 
@@ -145,7 +165,7 @@ export default function MusicPlayer({ files, onRefresh }: MusicPlayerProps) {
           <>
             <audio
               ref={audioRef}
-              src={apiPath('/api/audio', selectedFile)}
+              src={apiPath('/api/music-audio', selectedFile)}
               preload="metadata"
               onLoadedMetadata={(event) => setDuration(event.currentTarget.duration)}
               onDurationChange={(event) => setDuration(event.currentTarget.duration)}

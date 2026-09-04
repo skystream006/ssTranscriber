@@ -23,10 +23,16 @@ import {
   Minimize2,
   Music2,
   Palette,
+  PanelLeftClose,
+  PanelLeftOpen,
   Play,
+  Plus,
   RefreshCw,
+  Save,
   Square,
+  Star,
   TerminalSquare,
+  Trash2,
   WandSparkles,
 } from 'lucide-react'
 import MusicPlayer from './MusicPlayer'
@@ -59,6 +65,7 @@ type JobRequest = {
   vocal_separation: boolean
   demucs_mp3: boolean
   demucs_mp3_bitrate: number
+  copy_no_vocals: boolean
   keep_promotions: boolean
   use_lyrics: boolean
   lyrics_mode: 'prompt' | 'align' | 'correct'
@@ -88,6 +95,21 @@ type Transcript = {
   modified_at: string
 }
 
+type MusicFile = {
+  library: string
+  group: string
+  path: string
+  name: string
+}
+
+type SavedConfiguration = {
+  id: string
+  name: string
+  form: JobRequest
+  backendProfileText: string
+  fallbackProfileText: string
+}
+
 const defaultForm: JobRequest = {
   file: null,
   backend: 'faster-whisper',
@@ -97,6 +119,7 @@ const defaultForm: JobRequest = {
   vocal_separation: true,
   demucs_mp3: false,
   demucs_mp3_bitrate: 320,
+  copy_no_vocals: false,
   keep_promotions: false,
   use_lyrics: true,
   lyrics_mode: 'prompt',
@@ -119,6 +142,19 @@ const themeOptions: { value: Theme; label: string; colors: [string, string] }[] 
 ]
 const darkThemes = new Set<Theme>(['dark', 'royal-blue', 'royal-purple', 'black'])
 const viewPaths: Record<View, string> = { run: '/', music: '/music', results: '/results' }
+const configurationsStorageKey = 'ss-transcriber-configurations-v1'
+const defaultConfigurationStorageKey = 'ss-transcriber-default-configuration-v1'
+
+function readSavedConfigurations(): SavedConfiguration[] {
+  try {
+    const value = JSON.parse(localStorage.getItem(configurationsStorageKey) ?? '[]')
+    return Array.isArray(value)
+      ? value.filter((item) => item && typeof item.id === 'string' && typeof item.name === 'string' && item.form)
+      : []
+  } catch {
+    return []
+  }
+}
 
 function viewFromPath(pathname: string): View {
   if (pathname === '/music' || pathname.startsWith('/music/')) return 'music'
@@ -255,18 +291,30 @@ export default function App() {
   })
   const [config, setConfig] = useState<AppConfig | null>(null)
   const [files, setFiles] = useState<string[]>([])
+  const [musicFiles, setMusicFiles] = useState<MusicFile[]>([])
   const [jobs, setJobs] = useState<Job[]>([])
   const [selectedJob, setSelectedJob] = useState<Job | null>(null)
-  const [form, setForm] = useState<JobRequest>(defaultForm)
+  const [savedConfigurations, setSavedConfigurations] = useState<SavedConfiguration[]>(readSavedConfigurations)
+  const [defaultConfigurationId, setDefaultConfigurationId] = useState(() => localStorage.getItem(defaultConfigurationStorageKey) ?? '')
+  const startupConfiguration = useRef(savedConfigurations.find((item) => item.id === defaultConfigurationId)).current
+  const [selectedConfigurationId, setSelectedConfigurationId] = useState(startupConfiguration?.id ?? '')
+  const [configurationName, setConfigurationName] = useState(startupConfiguration?.name ?? '')
+  const [form, setForm] = useState<JobRequest>(() => ({
+    ...defaultForm,
+    ...(startupConfiguration?.form ?? {}),
+    file: null,
+  }))
   const [transcripts, setTranscripts] = useState<Transcript[]>([])
   const [selectedTranscript, setSelectedTranscript] = useState<string | null>(null)
   const [transcriptText, setTranscriptText] = useState('')
   const [view, setView] = useState<View>(() => viewFromPath(window.location.pathname))
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem('ss-transcriber-sidebar-collapsed') === 'true')
+  const [configurationCollapsed, setConfigurationCollapsed] = useState(false)
   const [consoleExpanded, setConsoleExpanded] = useState(false)
-  const [backendProfileText, setBackendProfileText] = useState('{}')
-  const [fallbackProfileText, setFallbackProfileText] = useState('{}')
+  const [backendProfileText, setBackendProfileText] = useState(startupConfiguration?.backendProfileText ?? '{}')
+  const [fallbackProfileText, setFallbackProfileText] = useState(startupConfiguration?.fallbackProfileText ?? '{}')
   const logRef = useRef<HTMLPreElement>(null)
   const themeMenuRef = useRef<HTMLDetailsElement>(null)
 
@@ -276,6 +324,10 @@ export default function App() {
     document.documentElement.style.colorScheme = darkThemes.has(theme) ? 'dark' : 'light'
     localStorage.setItem('ss-transcriber-theme', theme)
   }, [theme])
+
+  useEffect(() => {
+    localStorage.setItem('ss-transcriber-sidebar-collapsed', String(sidebarCollapsed))
+  }, [sidebarCollapsed])
 
   useEffect(() => {
     const syncView = () => setView(viewFromPath(window.location.pathname))
@@ -294,23 +346,27 @@ export default function App() {
     setTranscripts(result.files)
   }
 
-  const refreshFiles = async () => {
-    const result = await api<{ files: string[] }>('/api/files')
-    setFiles(result.files)
+  const refreshMusicFiles = async () => {
+    const result = await api<{ files: MusicFile[] }>('/api/music-files')
+    setMusicFiles(result.files)
   }
 
   useEffect(() => {
     Promise.all([
       api<AppConfig>('/api/config'),
       api<{ files: string[] }>('/api/files'),
+      api<{ files: MusicFile[] }>('/api/music-files'),
       api<Job[]>('/api/jobs'),
       api<{ files: Transcript[] }>('/api/transcripts'),
     ])
-      .then(([configResult, fileResult, jobResult, transcriptResult]) => {
+      .then(([configResult, fileResult, musicFileResult, jobResult, transcriptResult]) => {
         setConfig(configResult)
-        setBackendProfileText(profileText(configResult.backends[defaultForm.backend]?.options))
-        setFallbackProfileText(profileText(configResult.backends['viet-lyrics']?.options))
+        if (!startupConfiguration) {
+          setBackendProfileText(profileText(configResult.backends[defaultForm.backend]?.options))
+          setFallbackProfileText(profileText(configResult.backends['viet-lyrics']?.options))
+        }
         setFiles(fileResult.files)
+        setMusicFiles(musicFileResult.files)
         setJobs(jobResult)
         setTranscripts(transcriptResult.files)
         if (jobResult[0]) setSelectedJob(jobResult[0])
@@ -327,7 +383,7 @@ export default function App() {
           const detail = await api<Job>(`/api/jobs/${selectedJob.id}`)
           const justFinished = !terminalStatuses.includes(selectedJob.status) && terminalStatuses.includes(detail.status)
           setSelectedJob(detail)
-          if (justFinished) await refreshTranscripts()
+          if (justFinished) await Promise.all([refreshTranscripts(), refreshMusicFiles()])
         }
       } catch (reason) {
         setError(reason instanceof Error ? reason.message : String(reason))
@@ -369,6 +425,84 @@ export default function App() {
     }))
   }
 
+  const persistConfigurations = (configurations: SavedConfiguration[]) => {
+    setSavedConfigurations(configurations)
+    localStorage.setItem(configurationsStorageKey, JSON.stringify(configurations))
+  }
+
+  const loadConfiguration = (id: string) => {
+    setSelectedConfigurationId(id)
+    if (!id) return
+    const saved = savedConfigurations.find((item) => item.id === id)
+    if (!saved) return
+    setConfigurationName(saved.name)
+    setForm({ ...defaultForm, ...saved.form, file: null })
+    setBackendProfileText(saved.backendProfileText)
+    setFallbackProfileText(saved.fallbackProfileText)
+    setError(null)
+  }
+
+  const newConfiguration = () => {
+    setSelectedConfigurationId('')
+    setConfigurationName('')
+    setForm(defaultForm)
+    setBackendProfileText(profileText(config?.backends[defaultForm.backend]?.options))
+    setFallbackProfileText(profileText(config?.backends['viet-lyrics']?.options))
+    setError(null)
+  }
+
+  const saveConfiguration = () => {
+    const name = configurationName.trim()
+    if (!name) {
+      setError('Enter a configuration name before saving.')
+      return
+    }
+    try {
+      const backendOptions = parseProfile('Backend profile', backendProfileText)
+      const fallbackOptions = parseProfile('Fallback profile', fallbackProfileText)
+      const id = selectedConfigurationId || crypto.randomUUID()
+      const saved: SavedConfiguration = {
+        id,
+        name,
+        form: {
+          ...form,
+          file: null,
+          backend_options: backendOptions,
+          fallback_viet_lyrics_options: fallbackOptions,
+        },
+        backendProfileText: profileText(backendOptions),
+        fallbackProfileText: profileText(fallbackOptions),
+      }
+      persistConfigurations([
+        ...savedConfigurations.filter((item) => item.id !== id),
+        saved,
+      ])
+      setSelectedConfigurationId(id)
+      setConfigurationName(name)
+      setBackendProfileText(saved.backendProfileText)
+      setFallbackProfileText(saved.fallbackProfileText)
+      setError(null)
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason))
+    }
+  }
+
+  const setDefaultConfiguration = () => {
+    if (!selectedConfigurationId) return
+    setDefaultConfigurationId(selectedConfigurationId)
+    localStorage.setItem(defaultConfigurationStorageKey, selectedConfigurationId)
+  }
+
+  const deleteConfiguration = () => {
+    if (!selectedConfigurationId) return
+    persistConfigurations(savedConfigurations.filter((item) => item.id !== selectedConfigurationId))
+    if (defaultConfigurationId === selectedConfigurationId) {
+      setDefaultConfigurationId('')
+      localStorage.removeItem(defaultConfigurationStorageKey)
+    }
+    newConfiguration()
+  }
+
   const submit = async (event: FormEvent) => {
     event.preventDefault()
     setBusy(true)
@@ -387,6 +521,7 @@ export default function App() {
       })
       setSelectedJob(job)
       setJobs((current) => [job, ...current])
+      setConfigurationCollapsed(true)
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason))
     } finally {
@@ -492,18 +627,21 @@ export default function App() {
   )
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
       <aside className="sidebar">
         <div className="brand">
           <span className="brand-mark"><AudioLines /></span>
-          <span><strong>ss</strong>Transcriber</span>
+          <span className="brand-name"><strong>ss</strong>Transcriber</span>
+          <button className="sidebar-toggle" type="button" aria-label={sidebarCollapsed ? 'Expand side panel' : 'Shrink side panel'} title={sidebarCollapsed ? 'Expand side panel' : 'Shrink side panel'} onClick={() => setSidebarCollapsed((current) => !current)}>
+            {sidebarCollapsed ? <PanelLeftOpen /> : <PanelLeftClose />}
+          </button>
         </div>
         <nav aria-label="Workspace">
           <button className={view === 'run' ? 'active' : ''} onClick={() => navigate('run')}>
             <Music2 /> <span className="nav-label">Transcribe</span>
           </button>
           <button className={view === 'music' ? 'active' : ''} onClick={() => navigate('music')}>
-            <Headphones /> <span className="nav-label">Music</span> <span className="nav-count">{files.length}</span>
+            <Headphones /> <span className="nav-label">Music</span> <span className="nav-count">{musicFiles.length}</span>
           </button>
           <button className={view === 'results' ? 'active' : ''} onClick={() => navigate('results')}>
             <Archive /> <span className="nav-label">Results</span> <span className="nav-count">{transcripts.length}</span>
@@ -561,8 +699,34 @@ export default function App() {
         )}
 
         {view === 'run' ? (
-          <div className="run-layout">
-            <form className="control-panel" onSubmit={submit}>
+          <div className={`run-layout ${configurationCollapsed ? 'configuration-collapsed' : ''}`}>
+            {!configurationCollapsed && <form className="control-panel" onSubmit={submit}>
+              <section className="configuration-panel panel-section">
+                <div className="section-heading">
+                  <span className="step"><Save /></span>
+                  <div><h2>Configurations</h2><p>Save and reuse transcription settings</p></div>
+                  {selectedConfigurationId === defaultConfigurationId && defaultConfigurationId && <span className="configuration-default"><Star /> Default</span>}
+                </div>
+                <div className="configuration-fields">
+                  <label className="field">
+                    <FieldLabel info="Choose a saved configuration. Loading one restores all transcription and backend profile settings except the selected audio file.">Saved configuration</FieldLabel>
+                    <select value={selectedConfigurationId} onChange={(event) => loadConfiguration(event.target.value)}>
+                      <option value="">New configuration</option>
+                      {savedConfigurations.map((saved) => <option key={saved.id} value={saved.id}>{saved.name}{saved.id === defaultConfigurationId ? ' (default)' : ''}</option>)}
+                    </select>
+                  </label>
+                  <label className="field">
+                    <FieldLabel info="Name this configuration. Saving while an existing configuration is selected updates it.">Configuration name</FieldLabel>
+                    <input value={configurationName} maxLength={80} placeholder="My transcription setup" onChange={(event) => setConfigurationName(event.target.value)} />
+                  </label>
+                </div>
+                <div className="configuration-actions">
+                  <button type="button" onClick={newConfiguration}><Plus /> New</button>
+                  <button type="button" onClick={saveConfiguration}><Save /> Save</button>
+                  <button type="button" disabled={!selectedConfigurationId} onClick={setDefaultConfiguration}><Star /> Set default</button>
+                  <button className="danger" type="button" disabled={!selectedConfigurationId} onClick={deleteConfiguration}><Trash2 /> Delete</button>
+                </div>
+              </section>
               <section className="panel-section source-section">
                 <div className="section-heading">
                   <span className="step">01</span>
@@ -636,8 +800,18 @@ export default function App() {
               <details className="advanced panel-section" open>
                 <summary><WandSparkles /> Advanced <ChevronDown /></summary>
                 <div className="advanced-body">
-                  <Toggle checked={form.vocal_separation} onChange={(value) => update('vocal_separation', value)} label="Separate vocals with Demucs" info="Isolate the vocal stem before recognition. This often improves song transcription but adds processing time and can occasionally clip quiet openings." />
-                  <Toggle checked={form.demucs_mp3} onChange={(value) => update('demucs_mp3', value)} label="Store Demucs stem as MP3" info="Save separated vocals as a smaller lossy MP3 instead of the default WAV file." />
+                  <Toggle checked={form.vocal_separation} onChange={(value) => setForm((current) => ({ ...current, vocal_separation: value, demucs_mp3: value ? current.demucs_mp3 : false, copy_no_vocals: value ? current.copy_no_vocals : false }))} label="Separate vocals with Demucs" info="Isolate the vocal stem before recognition. This often improves song transcription but adds processing time and can occasionally clip quiet openings." />
+                  {form.vocal_separation && (
+                    <div className={`demucs-mp3-options ${form.demucs_mp3 ? 'expanded' : ''}`}>
+                      <Toggle checked={form.demucs_mp3} onChange={(value) => setForm((current) => ({ ...current, demucs_mp3: value, copy_no_vocals: value ? current.copy_no_vocals : false }))} label="Store Demucs stem as MP3" info="Save separated vocals as a smaller lossy MP3 instead of the default WAV file." />
+                      {form.demucs_mp3 && (
+                        <div className="demucs-mp3-expanded">
+                          <Toggle checked={form.copy_no_vocals} onChange={(value) => update('copy_no_vocals', value)} label="Copy no-vocals song" info="Copy the Demucs accompaniment to output/songs with embedded USLT and synchronized SYLT lyrics." />
+                          <label className="field"><FieldLabel info="Set the MP3 bitrate for saved Demucs stems. Higher values preserve more audio detail but create larger files.">Demucs bitrate</FieldLabel><div className="unit-input"><input type="number" min="64" max="512" value={form.demucs_mp3_bitrate} onChange={(event) => update('demucs_mp3_bitrate', Number(event.target.value))} /><span>kbps</span></div></label>
+                        </div>
+                      )}
+                    </div>
+                  )}
                   <Toggle checked={form.keep_promotions} onChange={(value) => update('keep_promotions', value)} label="Keep promotional phrases" info="Retain phrases such as subscribe, like, and thanks for watching instead of filtering them from transcripts." />
                   <Toggle checked={form.save_previous_results} onChange={(value) => update('save_previous_results', value)} label="Archive previous results" info="Rename existing transcript and Demucs folders to numbered archives before creating results for this run." />
                   <Toggle
@@ -647,9 +821,6 @@ export default function App() {
                     label="Viet Lyrics fallback pass"
                     info={form.backend === 'viet-lyrics' ? 'Unavailable because Viet Lyrics is already the primary transcription backend.' : 'When the opening retry triggers, run an additional Vietnamese lyrics model pass on the separated vocals.'}
                   />
-                  {form.demucs_mp3 && (
-                    <label className="field"><FieldLabel info="Set the MP3 bitrate for saved Demucs stems. Higher values preserve more audio detail but create larger files.">Demucs bitrate</FieldLabel><div className="unit-input"><input type="number" min="64" max="512" value={form.demucs_mp3_bitrate} onChange={(event) => update('demucs_mp3_bitrate', Number(event.target.value))} /><span>kbps</span></div></label>
-                  )}
                   {form.fallback_viet_lyrics && (
                     <>
                       <label className="field full">
@@ -691,16 +862,22 @@ export default function App() {
 
               <div className="action-bar">
                 <div><strong>{form.file ? '1 file' : `${files.length} files`}</strong><span>{form.backend} · {form.device}</span></div>
-                <button className="primary-button" type="submit" disabled={busy || !config}>
-                  {busy ? <LoaderCircle className="spin" /> : <Play />} Queue transcription
-                </button>
+                <div className="action-buttons">
+                  <button className="collapse-configuration" type="button" title="Shrink configuration" onClick={() => setConfigurationCollapsed(true)}><PanelLeftClose /> Shrink</button>
+                  <button className="primary-button" type="submit" disabled={busy || !config}>
+                    {busy ? <LoaderCircle className="spin" /> : <Play />} Queue transcription
+                  </button>
+                </div>
               </div>
-            </form>
+            </form>}
 
             <aside className="activity-panel">
               <div className="activity-head">
                 <div><span className="eyebrow">Live activity</span><h2>{selectedJob ? selectedJob.request.file ?? 'Batch run' : 'No job selected'}</h2></div>
-                {selectedJob && <span className={`status ${selectedJob.status}`}>{statusIcon(selectedJob.status)} {selectedJob.status}</span>}
+                <div className="activity-head-actions">
+                  {configurationCollapsed && <button className="icon-button" type="button" aria-label="Expand configuration" title="Expand configuration" onClick={() => setConfigurationCollapsed(false)}><PanelLeftOpen /></button>}
+                  {selectedJob && <span className={`status ${selectedJob.status}`}>{statusIcon(selectedJob.status)} {selectedJob.status}</span>}
+                </div>
               </div>
               {selectedJob ? (
                 <>
@@ -729,7 +906,7 @@ export default function App() {
             </aside>
           </div>
         ) : view === 'music' ? (
-          <MusicPlayer files={files} onRefresh={refreshFiles} />
+          <MusicPlayer files={musicFiles} onRefresh={refreshMusicFiles} />
         ) : (
           <div className="results-layout">
             <section className="result-list">

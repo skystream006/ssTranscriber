@@ -17,11 +17,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from mutagen.id3 import ID3, ID3NoHeaderError
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 REPO_ROOT = Path(__file__).resolve().parent
 INPUT_DIR = (REPO_ROOT / 'input').resolve()
 OUTPUT_DIR = (REPO_ROOT / 'output').resolve()
+SONGS_DIR = (OUTPUT_DIR / 'songs').resolve()
 WEB_DIST = REPO_ROOT / 'webui' / 'dist'
 SUPPORTED_AUDIO = {'.mp3', '.wav', '.flac', '.m4a', '.aac', '.ogg', '.opus', '.wma'}
 BACKEND_FILES = {
@@ -152,6 +153,16 @@ def input_audio_path(relative_path: str):
     return path
 
 
+def music_audio_path(library: str, relative_path: str):
+    root = {'input': INPUT_DIR, 'songs': SONGS_DIR}.get(library)
+    if root is None:
+        raise HTTPException(status_code=404, detail='Music library not found')
+    path = (root / relative_path).resolve()
+    if root not in path.parents or not path.is_file() or path.suffix.lower() not in SUPPORTED_AUDIO:
+        raise HTTPException(status_code=404, detail='Audio file not found')
+    return path
+
+
 class JobRequest(BaseModel):
     file: str | None = None
     backend: str = 'faster-whisper'
@@ -161,6 +172,7 @@ class JobRequest(BaseModel):
     vocal_separation: bool = True
     demucs_mp3: bool = False
     demucs_mp3_bitrate: int = Field(default=320, ge=64, le=512)
+    copy_no_vocals: bool = False
     keep_promotions: bool = False
     use_lyrics: bool = True
     lyrics_mode: Literal['prompt', 'align', 'correct'] = 'prompt'
@@ -187,6 +199,12 @@ class JobRequest(BaseModel):
         if INPUT_DIR not in candidate.parents or not candidate.is_file() or candidate.suffix.lower() not in SUPPORTED_AUDIO:
             raise ValueError('File must be a supported audio file under input/')
         return candidate.relative_to(INPUT_DIR).as_posix()
+
+    @model_validator(mode='after')
+    def validate_no_vocals_copy(self):
+        if self.copy_no_vocals and (not self.vocal_separation or not self.demucs_mp3):
+            raise ValueError('copy_no_vocals requires vocal_separation and demucs_mp3')
+        return self
 
 
 class Job:
@@ -254,6 +272,7 @@ def build_command(request: JobRequest):
     for enabled, flag in (
         (not request.vocal_separation, '--no-vocal-separation'),
         (request.demucs_mp3, '--demucs-mp3'),
+        (request.copy_no_vocals, '--copy-no-vocals'),
         (request.keep_promotions, '--keep-promotions'),
         (not request.use_lyrics, '--no-lyric-prompt'),
         (request.save_previous_results, '--save-previous-results'),
@@ -320,6 +339,25 @@ def get_files():
     return {'files': relative_files(INPUT_DIR, SUPPORTED_AUDIO)}
 
 
+@app.get('/api/music-files')
+def get_music_files():
+    files = []
+    for library, label, root in (
+        ('input', 'Input', INPUT_DIR),
+        ('songs', '[No Vocals]', SONGS_DIR),
+    ):
+        files.extend(
+            {
+                'library': library,
+                'group': label,
+                'path': relative_path,
+                'name': Path(relative_path).name,
+            }
+            for relative_path in relative_files(root, SUPPORTED_AUDIO)
+        )
+    return {'files': files}
+
+
 @app.get('/api/audio/{relative_path:path}')
 def get_audio(relative_path: str):
     return FileResponse(input_audio_path(relative_path))
@@ -328,6 +366,10 @@ def get_audio(relative_path: str):
 @app.get('/api/audio-lyrics/{relative_path:path}')
 def get_audio_lyrics(relative_path: str):
     path = input_audio_path(relative_path)
+    return audio_lyrics(path)
+
+
+def audio_lyrics(path: Path):
     try:
         tags = ID3(path)
     except ID3NoHeaderError:
@@ -356,6 +398,16 @@ def get_audio_lyrics(relative_path: str):
         'entries': entries,
         'uslt': uslt_frame.text.strip() if uslt_frame is not None else '',
     }
+
+
+@app.get('/api/music-audio/{library}/{relative_path:path}')
+def get_music_audio(library: str, relative_path: str):
+    return FileResponse(music_audio_path(library, relative_path))
+
+
+@app.get('/api/music-lyrics/{library}/{relative_path:path}')
+def get_music_lyrics(library: str, relative_path: str):
+    return audio_lyrics(music_audio_path(library, relative_path))
 
 
 @app.get('/api/jobs')

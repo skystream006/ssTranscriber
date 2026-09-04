@@ -1,5 +1,6 @@
 import argparse
 import json
+import shutil
 import subprocess
 import sys
 import uuid
@@ -104,6 +105,24 @@ def _load_lyrics_for_audio(audio_path: Path):
     return lyrics_text
 
 
+def _copy_no_vocals_song(source_audio: Path, vocals_path: Path, transcript, segments, language):
+    no_vocals_source = vocals_path.with_name('no_vocals.mp3')
+    if not no_vocals_source.is_file():
+        return None
+    songs_dir = REPO_ROOT / 'output' / 'songs'
+    songs_dir.mkdir(parents=True, exist_ok=True)
+    output_path = songs_dir / f'[NoVocals] {source_audio.stem}.mp3'
+    shutil.copy2(no_vocals_source, output_path)
+    write_lyrics_to_file(
+        output_path,
+        transcript,
+        segments,
+        language,
+        uslt_source_path=source_audio,
+    )
+    return output_path
+
+
 def _write_model_options(pass_number, pass_name, backend, model_name, device, language, options=None):
     manifest_path = TRANSCRIPTS_DIR / f'__{pass_number}{pass_name}_model_options.json'
     if manifest_path.exists():
@@ -176,6 +195,11 @@ def main():
         type=int,
         default=320,
         help='MP3 bitrate (kbps) used when --demucs-mp3 is set. Default 320.',
+    )
+    parser.add_argument(
+        '--copy-no-vocals',
+        action='store_true',
+        help='Copy the Demucs no-vocals MP3 to output/songs and embed the same lyrics as the source.',
     )
     parser.add_argument(
         '--file',
@@ -259,6 +283,8 @@ def main():
         parser.error('--backend-options-json must contain a JSON object.')
     if not isinstance(args.fallback_viet_lyrics_options_json, dict):
         parser.error('--fallback-viet-lyrics-options-json must contain a JSON object.')
+    if args.copy_no_vocals and (not args.demucs_mp3 or args.no_vocal_separation):
+        parser.error('--copy-no-vocals requires --demucs-mp3 and vocal separation')
     try:
         fallback_options = backends.resolve_options(
             'viet-lyrics', args.fallback_viet_lyrics_options_json
@@ -535,6 +561,18 @@ def main():
             if args.embed_lyrics:
                 write_lyrics_to_file(path, transcript, segments, language)
                 log_progress(f'{path.name} — embedded USLT + SYLT lyrics')
+
+            if args.copy_no_vocals:
+                no_vocals_output = _copy_no_vocals_song(
+                    path, transcription_path, transcript, segments, language
+                )
+                if no_vocals_output is not None:
+                    log_progress(f'{path.name} — copied and embedded no-vocals song: {no_vocals_output.name}')
+                else:
+                    log_progress(
+                        f'{path.name} — WARNING: no-vocals copy skipped because Demucs output '
+                        f'was not found beside {transcription_path}'
+                    )
 
             if used_original_fallback and args.fallback_viet_lyrics:
                 # The original-audio retry's own result was already saved as
