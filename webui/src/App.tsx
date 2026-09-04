@@ -863,7 +863,6 @@ export default function App() {
               <div className="action-bar">
                 <div><strong>{form.file ? '1 file' : `${files.length} files`}</strong><span>{form.backend} · {form.device}</span></div>
                 <div className="action-buttons">
-                  <button className="collapse-configuration" type="button" title="Shrink configuration" onClick={() => setConfigurationCollapsed(true)}><PanelLeftClose /> Shrink</button>
                   <button className="primary-button" type="submit" disabled={busy || !config}>
                     {busy ? <LoaderCircle className="spin" /> : <Play />} Queue transcription
                   </button>
@@ -875,7 +874,15 @@ export default function App() {
               <div className="activity-head">
                 <div><span className="eyebrow">Live activity</span><h2>{selectedJob ? selectedJob.request.file ?? 'Batch run' : 'No job selected'}</h2></div>
                 <div className="activity-head-actions">
-                  {configurationCollapsed && <button className="icon-button" type="button" aria-label="Expand configuration" title="Expand configuration" onClick={() => setConfigurationCollapsed(false)}><PanelLeftOpen /></button>}
+                  <button
+                    className="icon-button"
+                    type="button"
+                    aria-label={configurationCollapsed ? 'Expand configuration' : 'Shrink configuration'}
+                    title={configurationCollapsed ? 'Expand configuration' : 'Shrink configuration'}
+                    onClick={() => setConfigurationCollapsed((current) => !current)}
+                  >
+                    {configurationCollapsed ? <PanelLeftOpen /> : <PanelLeftClose />}
+                  </button>
                   {selectedJob && <span className={`status ${selectedJob.status}`}>{statusIcon(selectedJob.status)} {selectedJob.status}</span>}
                 </div>
               </div>

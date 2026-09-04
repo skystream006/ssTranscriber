@@ -371,7 +371,7 @@ for Vietnamese lyrics.
 On Windows, `faster-whisper` (CTranslate2) and `transformers`/`torch` bundle different,
 ABI-incompatible cuDNN builds. Loading both in the same process (e.g. the primary model plus
 an in-process fallback model) crashes with this error. `--fallback-viet-lyrics` retries run in
-an isolated worker process (`viet_lyrics_worker.py`) specifically to avoid this; if you see this
+an isolated worker process (`backends/viet_lyrics_worker.py`) specifically to avoid this; if you see this
 error elsewhere, avoid loading a transformers-based backend in the same run/process as
 `faster-whisper`.
 Use `--backend faster-whisper` (default), `--backend pho-whisper`, or `--backend viet-lyrics`

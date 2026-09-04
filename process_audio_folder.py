@@ -37,12 +37,13 @@ from transcribe_common import (
 
 
 def _start_viet_lyrics_worker(model_name: str, device: str, backend_options: dict):
-    # Runs in its own process; see viet_lyrics_worker.py for why this must
+    # Runs in its own process; see backends/viet_lyrics_worker.py for why this must
     # not share a process with the primary faster-whisper (CTranslate2) model.
     return subprocess.Popen(
         [
             sys.executable,
-            str(REPO_ROOT / 'viet_lyrics_worker.py'),
+            '-m',
+            'backends.viet_lyrics_worker',
             '--model',
             model_name,
             '--device',
@@ -57,6 +58,7 @@ def _start_viet_lyrics_worker(model_name: str, device: str, backend_options: dic
         encoding='utf-8',
         errors='replace',
         bufsize=1,
+        cwd=REPO_ROOT,
     )
 
 
