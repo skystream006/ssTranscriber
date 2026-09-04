@@ -9,7 +9,10 @@ type LyricEntry = {
 type LyricsResponse = {
   language: string | null
   entries: LyricEntry[]
+  uslt: string
 }
+
+type LyricsMode = 'sylt' | 'uslt'
 
 type MusicPlayerProps = {
   files: string[]
@@ -30,6 +33,8 @@ function durationLabel(seconds: number) {
 export default function MusicPlayer({ files, onRefresh }: MusicPlayerProps) {
   const [selectedFile, setSelectedFile] = useState('')
   const [lyrics, setLyrics] = useState<LyricEntry[]>([])
+  const [uslt, setUslt] = useState('')
+  const [lyricsMode, setLyricsMode] = useState<LyricsMode>('sylt')
   const [language, setLanguage] = useState<string | null>(null)
   const [lyricsLoading, setLyricsLoading] = useState(false)
   const [lyricsError, setLyricsError] = useState<string | null>(null)
@@ -53,6 +58,7 @@ export default function MusicPlayer({ files, onRefresh }: MusicPlayerProps) {
     setCurrentTime(0)
     setDuration(0)
     setLyrics([])
+    setUslt('')
     setLanguage(null)
     setLyricsError(null)
     if (!selectedFile) return
@@ -66,6 +72,7 @@ export default function MusicPlayer({ files, onRefresh }: MusicPlayerProps) {
       })
       .then((result) => {
         setLyrics(result.entries)
+        setUslt(result.uslt)
         setLanguage(result.language)
       })
       .catch((reason) => {
@@ -158,23 +165,32 @@ export default function MusicPlayer({ files, onRefresh }: MusicPlayerProps) {
               <input className="volume-slider" type="range" min="0" max="1" step="0.05" value={volume} onChange={(event) => setAudioVolume(Number(event.target.value))} aria-label="Volume" />
             </div>
             <div className="lyrics-stage" aria-live="polite">
-              <div className="lyrics-heading"><span>Synchronized lyrics</span><small>{lyrics.length ? `${lyrics.length} lines · SYLT` : 'SYLT'}</small></div>
-              <div className="lyrics-scroll">
-                {lyrics.map((entry, index) => (
-                  <button
-                    key={`${entry.time_ms}-${index}`}
-                    ref={index === activeIndex ? activeLyricRef : undefined}
-                    type="button"
-                    className={index === activeIndex ? 'active' : index < activeIndex ? 'past' : ''}
-                    onClick={() => seek(entry.time_ms / 1000)}
-                  >
-                    <time>{durationLabel(entry.time_ms / 1000)}</time>
-                    <span>{entry.text}</span>
-                  </button>
-                ))}
+              <div className="lyrics-heading">
+                <span>{lyricsMode === 'sylt' ? 'Synchronized lyrics' : 'Plain lyrics'}</span>
+                <div className="lyrics-mode" role="group" aria-label="Lyrics format">
+                  {(['sylt', 'uslt'] as const).map((mode) => (
+                    <button key={mode} type="button" className={lyricsMode === mode ? 'active' : ''} aria-pressed={lyricsMode === mode} onClick={() => setLyricsMode(mode)}>{mode.toUpperCase()}</button>
+                  ))}
+                </div>
+              </div>
+              <div className={`lyrics-scroll ${lyricsMode}`}>
+                {lyricsMode === 'sylt' && lyrics.map((entry, index) => (
+                    <button
+                      key={`${entry.time_ms}-${index}`}
+                      ref={index === activeIndex ? activeLyricRef : undefined}
+                      type="button"
+                      className={index === activeIndex ? 'active' : index < activeIndex ? 'past' : ''}
+                      onClick={() => seek(entry.time_ms / 1000)}
+                    >
+                      <time>{durationLabel(entry.time_ms / 1000)}</time>
+                      <span>{entry.text}</span>
+                    </button>
+                  ))}
+                {lyricsMode === 'uslt' && uslt && <pre className="uslt-text">{uslt}</pre>}
                 {lyricsLoading && <div className="lyrics-message">Reading embedded lyrics...</div>}
                 {!lyricsLoading && lyricsError && <div className="lyrics-message error">{lyricsError}</div>}
-                {!lyricsLoading && !lyricsError && !lyrics.length && <div className="lyrics-message"><Music2 /><strong>No synchronized lyrics</strong><span>This file does not contain a millisecond-based SYLT frame.</span></div>}
+                {!lyricsLoading && !lyricsError && lyricsMode === 'sylt' && !lyrics.length && <div className="lyrics-message"><Music2 /><strong>No synchronized lyrics</strong><span>This file does not contain a millisecond-based SYLT frame.</span></div>}
+                {!lyricsLoading && !lyricsError && lyricsMode === 'uslt' && !uslt && <div className="lyrics-message"><Music2 /><strong>No plain lyrics</strong><span>This file does not contain a USLT frame.</span></div>}
               </div>
             </div>
           </>

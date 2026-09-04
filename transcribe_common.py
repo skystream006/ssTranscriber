@@ -561,7 +561,14 @@ def write_lyrics_to_file(path: Path, transcript: str, segments, language='und'):
     tags.delall('USLT')
     tags.delall('SYLT')
 
-    uslt = USLT(encoding=TEXT_ENCODING, lang=language, desc='Transcription', text=transcript)
+    lyrics_path = ROOT / 'lyrics' / f'{path.stem}.txt'
+    uslt_text = transcript
+    if lyrics_path.is_file():
+        matched_lyrics = lyrics_path.read_text(encoding='utf-8-sig').strip()
+        if matched_lyrics:
+            uslt_text = matched_lyrics
+
+    uslt = USLT(encoding=TEXT_ENCODING, lang=language, desc='Transcription', text=uslt_text)
     tags.add(uslt)
 
     sylt_entries = build_sylt_entries(segments)

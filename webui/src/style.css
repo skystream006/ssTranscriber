@@ -367,8 +367,11 @@ h2 { font-size: 18px; line-height: 1.2; font-weight: 650; letter-spacing: 0; }
 .player-controls > svg { width: 16px; color: var(--muted); }
 .lyrics-stage { min-height: 0; display: grid; grid-template-rows: 42px minmax(0, 1fr); background: linear-gradient(180deg, var(--paper), var(--field)); }
 .lyrics-heading { padding: 0 22px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--soft-line); color: var(--ink); font-size: 11px; font-weight: 650; text-transform: uppercase; }
-.lyrics-heading small { color: var(--muted); font: 9px var(--mono); }
+.lyrics-mode { height: 28px; padding: 2px; display: grid; grid-template-columns: 1fr 1fr; gap: 2px; background: var(--segment); border-radius: 4px; }
+.lyrics-mode button { min-width: 52px; padding: 0 8px; color: var(--muted); background: transparent; border: 0; border-radius: 3px; font: 700 9px var(--mono); }
+.lyrics-mode button.active { color: var(--green); background: var(--field); box-shadow: 0 1px 4px var(--panel-shadow); }
 .lyrics-scroll { min-height: 360px; max-height: calc(100vh - 363px); padding: 30vh 0; overflow-y: auto; scroll-behavior: smooth; }
+.lyrics-scroll.uslt { padding: 0; scroll-behavior: auto; }
 .lyrics-scroll > button { width: 100%; min-height: 54px; padding: 10px 26px; display: grid; grid-template-columns: 48px minmax(0, 1fr); align-items: center; gap: 12px; color: var(--muted); background: transparent; border: 0; text-align: left; opacity: .58; transition: color .18s, opacity .18s, background .18s; }
 .lyrics-scroll > button:hover { color: var(--ink); opacity: 1; background: var(--hover); }
 .lyrics-scroll > button.active { color: var(--ink); opacity: 1; background: var(--selected); }
@@ -376,6 +379,7 @@ h2 { font-size: 18px; line-height: 1.2; font-weight: 650; letter-spacing: 0; }
 .lyrics-scroll > button.past { opacity: .38; }
 .lyrics-scroll time { color: var(--green); font: 9px var(--mono); }
 .lyrics-scroll span { line-height: 1.4; overflow-wrap: anywhere; }
+.uslt-text { min-height: 100%; margin: 0; padding: 34px 30px 80px; color: var(--ink); background: transparent; font: 15px/1.9 Bahnschrift, "Arial Narrow", sans-serif; white-space: pre-wrap; overflow-wrap: anywhere; }
 .lyrics-message { min-height: 280px; padding: 30px; display: grid; place-items: center; align-content: center; gap: 7px; color: var(--muted); text-align: center; font-size: 12px; }
 .lyrics-message svg { width: 32px; height: 32px; color: var(--green); }
 .lyrics-message strong { color: var(--ink); font-size: 14px; }
@@ -477,7 +481,11 @@ h2 { font-size: 18px; line-height: 1.2; font-weight: 650; letter-spacing: 0; }
   .player-controls { grid-template-columns: 42px 38px minmax(70px, 1fr) 38px; padding-inline: 14px; }
   .player-controls > svg, .volume-slider { display: none; }
   .lyrics-scroll { max-height: 520px; padding: 56px 0 220px; }
+  .lyrics-scroll.uslt { padding: 0; }
   .lyrics-scroll > button { padding-inline: 17px; grid-template-columns: 42px minmax(0, 1fr); }
+  .lyrics-heading { padding-inline: 14px; }
+  .lyrics-mode button { min-width: 48px; padding-inline: 6px; }
+  .uslt-text { padding: 25px 18px 80px; font-size: 14px; }
   .now-playing { grid-template-columns: 52px minmax(0, 1fr) auto; padding-inline: 16px; }
   .album-mark { width: 52px; height: 52px; }
 }

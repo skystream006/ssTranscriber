@@ -329,23 +329,32 @@ def get_audio(relative_path: str):
 def get_audio_lyrics(relative_path: str):
     path = input_audio_path(relative_path)
     try:
-        frames = ID3(path).getall('SYLT')
+        tags = ID3(path)
     except ID3NoHeaderError:
-        frames = []
+        tags = ID3()
 
-    frame = next((item for item in frames if item.desc == 'Transcription'), None)
-    if frame is None and frames:
-        frame = frames[0]
-    if frame is None or frame.format != 2:
-        return {'language': None, 'entries': []}
+    sylt_frames = tags.getall('SYLT')
+    sylt_frame = next((item for item in sylt_frames if item.desc == 'Transcription'), None)
+    if sylt_frame is None and sylt_frames:
+        sylt_frame = sylt_frames[0]
+
+    uslt_frames = tags.getall('USLT')
+    uslt_frame = next((item for item in uslt_frames if item.desc == 'Transcription'), None)
+    if uslt_frame is None and uslt_frames:
+        uslt_frame = uslt_frames[0]
+
+    entries = []
+    if sylt_frame is not None and sylt_frame.format == 2:
+        entries = [
+            {'text': text, 'time_ms': time_ms}
+            for text, time_ms in sorted(sylt_frame.text, key=lambda item: item[1])
+            if text.strip()
+        ]
 
     return {
-        'language': frame.lang,
-        'entries': [
-            {'text': text, 'time_ms': time_ms}
-            for text, time_ms in sorted(frame.text, key=lambda item: item[1])
-            if text.strip()
-        ],
+        'language': sylt_frame.lang if sylt_frame is not None else uslt_frame.lang if uslt_frame is not None else None,
+        'entries': entries,
+        'uslt': uslt_frame.text.strip() if uslt_frame is not None else '',
     }
 
 
