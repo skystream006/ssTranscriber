@@ -16,6 +16,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from mutagen.id3 import ID3, ID3NoHeaderError
 from pydantic import BaseModel, Field, field_validator
 
 REPO_ROOT = Path(__file__).resolve().parent
@@ -142,6 +143,13 @@ def relative_files(root: Path, extensions=None):
         for path in sorted(root.rglob('*'), key=lambda item: str(item).casefold())
         if path.is_file() and (extensions is None or path.suffix.lower() in extensions)
     ]
+
+
+def input_audio_path(relative_path: str):
+    path = (INPUT_DIR / relative_path).resolve()
+    if INPUT_DIR not in path.parents or not path.is_file() or path.suffix.lower() not in SUPPORTED_AUDIO:
+        raise HTTPException(status_code=404, detail='Audio file not found')
+    return path
 
 
 class JobRequest(BaseModel):
@@ -311,6 +319,35 @@ def get_files():
     return {'files': relative_files(INPUT_DIR, SUPPORTED_AUDIO)}
 
 
+@app.get('/api/audio/{relative_path:path}')
+def get_audio(relative_path: str):
+    return FileResponse(input_audio_path(relative_path))
+
+
+@app.get('/api/audio-lyrics/{relative_path:path}')
+def get_audio_lyrics(relative_path: str):
+    path = input_audio_path(relative_path)
+    try:
+        frames = ID3(path).getall('SYLT')
+    except ID3NoHeaderError:
+        frames = []
+
+    frame = next((item for item in frames if item.desc == 'Transcription'), None)
+    if frame is None and frames:
+        frame = frames[0]
+    if frame is None or frame.format != 2:
+        return {'language': None, 'entries': []}
+
+    return {
+        'language': frame.lang,
+        'entries': [
+            {'text': text, 'time_ms': time_ms}
+            for text, time_ms in sorted(frame.text, key=lambda item: item[1])
+            if text.strip()
+        ],
+    }
+
+
 @app.get('/api/jobs')
 def get_jobs():
     return [job.public() for job in reversed(list(jobs.values()))]
@@ -381,6 +418,11 @@ def get_transcript(relative_path: str):
 
 
 if WEB_DIST.is_dir():
+    @app.get('/music', include_in_schema=False)
+    @app.get('/results', include_in_schema=False)
+    def get_webui_route():
+        return FileResponse(WEB_DIST / 'index.html')
+
     app.mount('/', StaticFiles(directory=WEB_DIST, html=True), name='webui')
 
 

@@ -16,6 +16,7 @@ import {
   FolderOpen,
   Gauge,
   History,
+  Headphones,
   Info,
   LoaderCircle,
   Maximize2,
@@ -28,6 +29,7 @@ import {
   TerminalSquare,
   WandSparkles,
 } from 'lucide-react'
+import MusicPlayer from './MusicPlayer'
 
 type BackendConfig = {
   models: string[]
@@ -43,6 +45,7 @@ type AppConfig = {
 
 type JobStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'
 type Theme = 'light' | 'dark' | 'royal-blue' | 'royal-purple' | 'black' | 'yellow'
+type View = 'run' | 'music' | 'results'
 type ViewTransitionDocument = Document & {
   startViewTransition?: (update: () => void) => { ready: Promise<void> }
 }
@@ -115,6 +118,13 @@ const themeOptions: { value: Theme; label: string; colors: [string, string] }[] 
   { value: 'yellow', label: 'Yellow', colors: ['#f3cf3f', '#3d3208'] },
 ]
 const darkThemes = new Set<Theme>(['dark', 'royal-blue', 'royal-purple', 'black'])
+const viewPaths: Record<View, string> = { run: '/', music: '/music', results: '/results' }
+
+function viewFromPath(pathname: string): View {
+  if (pathname === '/music' || pathname.startsWith('/music/')) return 'music'
+  if (pathname === '/results' || pathname.startsWith('/results/')) return 'results'
+  return 'run'
+}
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, init)
@@ -251,7 +261,7 @@ export default function App() {
   const [transcripts, setTranscripts] = useState<Transcript[]>([])
   const [selectedTranscript, setSelectedTranscript] = useState<string | null>(null)
   const [transcriptText, setTranscriptText] = useState('')
-  const [view, setView] = useState<'run' | 'results'>('run')
+  const [view, setView] = useState<View>(() => viewFromPath(window.location.pathname))
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [consoleExpanded, setConsoleExpanded] = useState(false)
@@ -267,9 +277,26 @@ export default function App() {
     localStorage.setItem('ss-transcriber-theme', theme)
   }, [theme])
 
+  useEffect(() => {
+    const syncView = () => setView(viewFromPath(window.location.pathname))
+    window.addEventListener('popstate', syncView)
+    return () => window.removeEventListener('popstate', syncView)
+  }, [])
+
+  const navigate = (nextView: View) => {
+    const path = viewPaths[nextView]
+    if (window.location.pathname !== path) window.history.pushState(null, '', path)
+    setView(nextView)
+  }
+
   const refreshTranscripts = async () => {
     const result = await api<{ files: Transcript[] }>('/api/transcripts')
     setTranscripts(result.files)
+  }
+
+  const refreshFiles = async () => {
+    const result = await api<{ files: string[] }>('/api/files')
+    setFiles(result.files)
   }
 
   useEffect(() => {
@@ -380,7 +407,7 @@ export default function App() {
   }
 
   const openJob = async (job: Job) => {
-    setView('run')
+    navigate('run')
     try {
       setSelectedJob(await api<Job>(`/api/jobs/${job.id}`))
     } catch (reason) {
@@ -472,10 +499,13 @@ export default function App() {
           <span><strong>ss</strong>Transcriber</span>
         </div>
         <nav aria-label="Workspace">
-          <button className={view === 'run' ? 'active' : ''} onClick={() => setView('run')}>
+          <button className={view === 'run' ? 'active' : ''} onClick={() => navigate('run')}>
             <Music2 /> <span className="nav-label">Transcribe</span>
           </button>
-          <button className={view === 'results' ? 'active' : ''} onClick={() => setView('results')}>
+          <button className={view === 'music' ? 'active' : ''} onClick={() => navigate('music')}>
+            <Headphones /> <span className="nav-label">Music</span> <span className="nav-count">{files.length}</span>
+          </button>
+          <button className={view === 'results' ? 'active' : ''} onClick={() => navigate('results')}>
             <Archive /> <span className="nav-label">Results</span> <span className="nav-count">{transcripts.length}</span>
           </button>
         </nav>
@@ -489,7 +519,7 @@ export default function App() {
         <header className="topbar">
           <div>
             <span className="eyebrow">Local audio workspace</span>
-            <h1>{view === 'run' ? 'Transcription desk' : 'Transcript archive'}</h1>
+            <h1>{view === 'run' ? 'Transcription desk' : view === 'music' ? 'Music player' : 'Transcript archive'}</h1>
           </div>
           <div className="topbar-actions">
             <details className="theme-picker" ref={themeMenuRef}>
@@ -698,6 +728,8 @@ export default function App() {
               </div>
             </aside>
           </div>
+        ) : view === 'music' ? (
+          <MusicPlayer files={files} onRefresh={refreshFiles} />
         ) : (
           <div className="results-layout">
             <section className="result-list">

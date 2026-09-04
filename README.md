@@ -120,6 +120,10 @@ JSON. Enabling **Viet Lyrics fallback pass** adds an independent **Fallback prof
 isolated fallback worker. Nested objects are merged with the displayed defaults, unknown top-level
 option groups are rejected, and **Reset defaults** restores the profile for the selected backend.
 
+The **Music** workspace plays supported audio directly from `input/`. For MP3 files containing an
+ID3 `SYLT` frame with absolute-millisecond timestamps, the lyric timeline follows playback and each
+line can be selected to seek to its timestamp. Files without embedded `SYLT` lyrics still play.
+
 ## Usage
 
 1. Drop audio files into `input/` (subfolders are scanned recursively).
