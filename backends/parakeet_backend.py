@@ -34,7 +34,7 @@ def load(model_name: str, device: str):
     return model
 
 
-def transcribe(model, path, language, label: str):
+def transcribe(model, path, language, label: str, lyrics_text=None):
     def _transcribe_parakeet():
         try:
             return model.transcribe(

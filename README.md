@@ -27,7 +27,7 @@ NVIDIA driver that reports CUDA 13.0 or newer in `nvidia-smi`.
 ## Setup
 
 ```powershell
-python .\initialize_project.py
+python .\_initialize_project.py
 python .\install_audio_tools.py --cuda cu124
 ```
 
@@ -81,7 +81,13 @@ mismatched PyTorch build — rerun with a different `--cuda` value.
 ## Usage
 
 1. Drop audio files into `input/` (subfolders are scanned recursively).
-2. Run:
+2. Optionally place known lyrics in `input/lyrics/` as UTF-8 text using the same filename stem as
+  the audio, for example `input/song.mp3` and `input/lyrics/song.txt`. Faster-Whisper,
+  PhoWhisper, and Viet Lyrics can use matching text in `prompt`, `align`, or `correct` mode.
+  `align` maps authoritative lyric lines onto ASR-derived timing; it is not a separate acoustic
+  forced-alignment engine. Missing or empty files are ignored, Parakeet/SenseVoice continue without
+  prompt biasing, and `--no-lyric-prompt` disables all lyric modes.
+3. Run:
 
 ```powershell
 python .\process_audio_folder.py
@@ -154,6 +160,8 @@ python .\process_audio_folder.py --device cuda:0 --backend viet-lyrics --model k
 | `--demucs-mp3-bitrate` | kbps (int) | `320` | MP3 bitrate used when `--demucs-mp3` is set. |
 | `--file` | relative path under `input/` | all supported files | Processes a single selected audio file. |
 | `--keep-promotions` | flag | off | Keeps known promotional phrases instead of stripping them out. |
+| `--no-lyric-prompt` | flag | off | Ignores matching files under `input/lyrics/` and overrides `--lyrics-mode`. |
+| `--lyrics-mode` | `prompt`, `align`, `correct` | `prompt` | `prompt` biases decoding; `align` maps authoritative lyric lines to ASR timing; `correct` replaces recognized text while preserving ASR segment timing. |
 | `--opening-threshold` | seconds (float) | `1.0` | If the first usable vocal segment starts later than this, retries on the original (non-separated) audio to recover a possibly clipped opening. |
 | `--fallback-viet-lyrics` | flag | off | When the `--opening-threshold` retry triggers, runs a 3rd pass with the `viet-lyrics` backend (on the separated vocals) after the primary `--backend`/`--model` retry on the original audio. |
 | `--fallback-viet-lyrics-model` | Hugging Face model ID | `kelvinbksoh/whisper-large-v2-vietnamese-lyrics-transcription` | Model used for `--fallback-viet-lyrics` retries. |
@@ -171,6 +179,13 @@ Supported extensions: `.mp3`, `.wav`, `.flac`, `.m4a`, `.aac`, `.ogg`, `.opus`, 
 ### Transcript output behavior
 
 - `output/transcripts/` is cleared at the start of each run so stale files do not remain.
+- Pass `--save-previous-results` to preserve a non-empty transcript folder before processing. It is
+  renamed to the next available numbered folder (`transcripts_01`, `transcripts_02`, and so on),
+  and a new empty `output/transcripts/` folder is created for the current run. A non-empty
+  `temp/htdemucs/` folder is preserved the same way as `htdemucs_01`, `htdemucs_02`, and so on.
+- Each transcription pass writes its backend, model, device, language, and complete backend options
+  to `__1initial_model_options.json`, `__2original_model_options.json`, or
+  `__3fallback_model_options.json`. Retry manifests are created only when those passes run.
 - Transcript files are written as LRC-style synced lyrics (`[mm:ss.xx]text` per line), using the
   same `(text, start_ms)` entries embedded as the mp3's `SYLT` frame via `mutagen.id3.SYLT`, so the
   `.txt` file always matches what is written into the audio file and can be used to re-embed SYLT

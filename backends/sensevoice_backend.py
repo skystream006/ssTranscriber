@@ -48,7 +48,7 @@ def load(model_name: str, device: str):
     )
 
 
-def transcribe(model, path, language, label: str):
+def transcribe(model, path, language, label: str, lyrics_text=None):
     if language and language not in SUPPORTED_LANGUAGES:
         raise ValueError(
             f'sensevoice backend does not support language "{language}". '

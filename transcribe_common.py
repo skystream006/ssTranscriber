@@ -13,6 +13,7 @@ import threading
 import time
 from contextlib import contextmanager
 from datetime import datetime
+from difflib import SequenceMatcher
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -136,6 +137,120 @@ def filter_transcript_segments(segments, allow_promotions=False):
         previous = normalized
 
     return filtered, removed_promotions, removed_duplicates
+
+
+def _words_with_normalized_text(text):
+    words = []
+    for word in re.findall(r'\S+', text):
+        normalized = normalized_text(word)
+        if normalized:
+            words.append((word, normalized))
+    return words
+
+
+def _alignment_anchors(lyric_words, transcript_words):
+    matcher = SequenceMatcher(None, lyric_words, transcript_words, autojunk=False)
+    anchors = {(0, 0), (len(lyric_words), len(transcript_words))}
+    for lyric_start, transcript_start, size in matcher.get_matching_blocks():
+        for offset in range(size + 1):
+            anchors.add((lyric_start + offset, transcript_start + offset))
+    return sorted(anchors)
+
+
+def _map_position(position, anchors):
+    before = anchors[0]
+    for after in anchors[1:]:
+        if position <= after[0]:
+            if after[0] == before[0]:
+                return float(after[1])
+            fraction = (position - before[0]) / (after[0] - before[0])
+            return before[1] + fraction * (after[1] - before[1])
+        before = after
+    return float(anchors[-1][1])
+
+
+def _transcript_word_times(segments):
+    word_times = []
+    for segment in segments:
+        words = _words_with_normalized_text(segment.text or '')
+        if not words:
+            continue
+        start = float(segment.start)
+        end = max(float(segment.end), start)
+        duration = end - start
+        for index, (_, normalized) in enumerate(words):
+            word_start = start + duration * index / len(words)
+            word_end = start + duration * (index + 1) / len(words)
+            word_times.append((normalized, word_start, word_end))
+    return word_times
+
+
+def _time_at_word_position(position, word_times):
+    if not word_times:
+        return 0.0
+    if position <= 0:
+        return word_times[0][1]
+    if position >= len(word_times):
+        return word_times[-1][2]
+    lower = int(position)
+    fraction = position - lower
+    left = word_times[lower - 1][2] if lower else word_times[0][1]
+    right = word_times[lower][1]
+    return left + fraction * (right - left)
+
+
+def apply_lyrics_mode(segments, lyrics_text, mode):
+    segments = list(segments)
+    if not lyrics_text or mode == 'prompt' or not segments:
+        return segments
+
+    lyric_lines = [line.strip() for line in lyrics_text.splitlines() if line.strip()]
+    lyric_words = _words_with_normalized_text('\n'.join(lyric_lines))
+    word_times = _transcript_word_times(segments)
+    if not lyric_lines or not lyric_words or not word_times:
+        return segments
+
+    lyric_normalized = [normalized for _, normalized in lyric_words]
+    transcript_normalized = [normalized for normalized, _, _ in word_times]
+    anchors = _alignment_anchors(lyric_normalized, transcript_normalized)
+
+    if mode == 'align':
+        aligned = []
+        lyric_position = 0
+        for line in lyric_lines:
+            line_word_count = len(_words_with_normalized_text(line))
+            if not line_word_count:
+                continue
+            start_position = _map_position(lyric_position, anchors)
+            lyric_position += line_word_count
+            end_position = _map_position(lyric_position, anchors)
+            start = _time_at_word_position(start_position, word_times)
+            end = max(_time_at_word_position(end_position, word_times), start)
+            aligned.append(SimpleNamespace(start=start, end=end, text=line))
+        return aligned or segments
+
+    if mode == 'correct':
+        reverse_anchors = sorted((transcript, lyric) for lyric, transcript in anchors)
+        corrected = []
+        transcript_position = 0
+        previous_lyric_end = 0
+        for index, segment in enumerate(segments):
+            segment_word_count = len(_words_with_normalized_text(segment.text or ''))
+            transcript_position += segment_word_count
+            lyric_end = round(_map_position(transcript_position, reverse_anchors))
+            if index == len(segments) - 1:
+                lyric_end = len(lyric_words)
+            lyric_end = min(max(lyric_end, previous_lyric_end), len(lyric_words))
+            text = ' '.join(word for word, _ in lyric_words[previous_lyric_end:lyric_end])
+            corrected.append(SimpleNamespace(
+                start=float(segment.start),
+                end=float(segment.end),
+                text=text or segment.text,
+            ))
+            previous_lyric_end = lyric_end
+        return corrected
+
+    raise ValueError(f'Unsupported lyrics mode: {mode}')
 
 
 def log_progress(message: str):
@@ -281,14 +396,43 @@ def iter_audio_files(root: Path):
             yield path
 
 
-def clear_transcripts():
+def clear_transcripts(save_previous=False):
     TRANSCRIPTS_DIR.mkdir(parents=True, exist_ok=True)
+    if save_previous and any(TRANSCRIPTS_DIR.iterdir()):
+        suffix = 1
+        while True:
+            archive_dir = TRANSCRIPTS_DIR.with_name(f'{TRANSCRIPTS_DIR.name}_{suffix:02d}')
+            if not archive_dir.exists():
+                TRANSCRIPTS_DIR.rename(archive_dir)
+                TRANSCRIPTS_DIR.mkdir(parents=True)
+                log_progress(f'Archived previous transcripts: {archive_dir}')
+                return archive_dir
+            suffix += 1
+
     for child in TRANSCRIPTS_DIR.iterdir():
         if child.is_dir() and not child.is_symlink():
             shutil.rmtree(child)
         else:
             child.unlink()
     log_progress(f'Cleared transcript output directory: {TRANSCRIPTS_DIR}')
+    return None
+
+
+def archive_demucs_results():
+    demucs_dir = TEMP_DIR / 'htdemucs'
+    demucs_dir.mkdir(parents=True, exist_ok=True)
+    if not any(demucs_dir.iterdir()):
+        return None
+
+    suffix = 1
+    while True:
+        archive_dir = demucs_dir.with_name(f'{demucs_dir.name}_{suffix:02d}')
+        if not archive_dir.exists():
+            demucs_dir.rename(archive_dir)
+            demucs_dir.mkdir(parents=True)
+            log_progress(f'Archived previous Demucs results: {archive_dir}')
+            return archive_dir
+        suffix += 1
 
 
 def separate_vocals(path: Path, device: str, output_root: Path, use_mp3=False, mp3_bitrate=320):
@@ -464,6 +608,7 @@ def run_transformers_pipeline_transcription(
     path: Path,
     language,
     label: str,
+    lyrics_text=None,
     default_language='und',
     chunk_length_s=30,
     stride_length_s=5,
@@ -484,6 +629,14 @@ def run_transformers_pipeline_transcription(
         'stride_length_s': stride_length_s,
     }
     kwargs.update(generation_kwargs or {})
+    if lyrics_text:
+        prompt_ids = model.tokenizer.get_prompt_ids(lyrics_text, return_tensors='pt')
+        prompt_ids = prompt_ids[-128:]
+        kwargs['prompt_ids'] = prompt_ids
+        max_target_positions = getattr(model.model.config, 'max_target_positions', 448)
+        prompt_budget = max_target_positions - len(prompt_ids) - 4
+        if kwargs.get('max_new_tokens') is not None:
+            kwargs['max_new_tokens'] = min(kwargs['max_new_tokens'], prompt_budget)
     if language:
         kwargs['language'] = language
     result = model(str(path), **kwargs)

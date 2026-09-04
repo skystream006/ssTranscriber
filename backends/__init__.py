@@ -9,6 +9,7 @@ cuDNN builds, and having both loaded in the same process crashes on Windows
 with "Could not load symbol cudnnGetLibConfig. Error code 127".
 """
 import importlib
+from pathlib import Path
 
 from transcribe_common import log_progress
 
@@ -39,11 +40,34 @@ def get_models(backend: str):
     return _get_module(backend).MODELS
 
 
+def _json_value(value):
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, dict):
+        return {str(key): _json_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_value(item) for item in value]
+    if isinstance(value, set):
+        return sorted(_json_value(item) for item in value)
+    if isinstance(value, Path):
+        return str(value)
+    return repr(value)
+
+
+def get_options(backend: str):
+    module = _get_module(backend)
+    return {
+        name: _json_value(value)
+        for name, value in vars(module).items()
+        if name.isupper() and not name.startswith('_') and name != 'MODELS'
+    }
+
+
 def load_model(model_name: str, backend: str, device: str):
     return _get_module(backend).load(model_name, device)
 
 
-def transcribe_audio(model, path, language, label: str, backend: str):
+def transcribe_audio(model, path, language, label: str, backend: str, lyrics_text=None):
     log_progress(f'{label} — transcription started')
-    return _get_module(backend).transcribe(model, path, language, label)
+    return _get_module(backend).transcribe(model, path, language, label, lyrics_text=lyrics_text)
 

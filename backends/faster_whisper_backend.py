@@ -155,11 +155,14 @@ def load(model_name: str, device: str):
     )
 
 
-def transcribe(model, path, language, label: str):
+def transcribe(model, path, language, label: str, lyrics_text=None):
+    transcribe_kwargs = dict(TRANSCRIBE_KWARGS)
+    if lyrics_text:
+        transcribe_kwargs['initial_prompt'] = lyrics_text
     segment_iterator, info = model.transcribe(
         str(path),
         language=language,
-        **TRANSCRIBE_KWARGS,
+        **transcribe_kwargs,
     )
     segments = []
     last_reported = 0

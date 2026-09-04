@@ -61,12 +61,13 @@ def load(model_name: str, device: str):
     return load_transformers_asr_pipeline(model_name, device, 'viet-lyrics')
 
 
-def transcribe(model, path, language, label: str):
+def transcribe(model, path, language, label: str, lyrics_text=None):
     return run_transformers_pipeline_transcription(
         model,
         path,
         language,
         label,
+        lyrics_text=lyrics_text,
         default_language='vi',
         chunk_length_s=CHUNK_LENGTH_S,
         stride_length_s=STRIDE_LENGTH_S,

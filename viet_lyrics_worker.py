@@ -52,6 +52,7 @@ def main():
                 Path(request['audio_path']),
                 request.get('language'),
                 request.get('label') or Path(request['audio_path']).name,
+                lyrics_text=request.get('lyrics_text'),
             )
             payload = {
                 'language': info.language,

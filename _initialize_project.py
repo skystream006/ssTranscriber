@@ -2,7 +2,7 @@ from pathlib import Path
 from shutil import copyfile
 
 REPO_ROOT = Path(__file__).resolve().parent
-DIRECTORIES = ('input', 'output', 'temp')
+DIRECTORIES = ('input', 'input/lyrics', 'output', 'temp')
 
 
 def main():

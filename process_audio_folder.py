@@ -14,6 +14,8 @@ from transcribe_common import (
     ROOT,
     TEMP_DIR,
     TRANSCRIPTS_DIR,
+    apply_lyrics_mode,
+    archive_demucs_results,
     available_devices,
     build_sylt_entries,
     clear_transcripts,
@@ -47,12 +49,13 @@ def _start_viet_lyrics_worker(model_name: str, device: str):
     )
 
 
-def _transcribe_with_viet_lyrics_worker(worker, audio_path: Path, language, label: str):
+def _transcribe_with_viet_lyrics_worker(worker, audio_path: Path, language, label: str, lyrics_text=None):
     result_path = TEMP_DIR / f'viet_lyrics_result_{uuid.uuid4().hex}.json'
     request = {
         'audio_path': str(audio_path),
         'language': language,
         'label': label,
+        'lyrics_text': lyrics_text,
         'result_path': str(result_path),
     }
     worker.stdin.write(json.dumps(request) + '\n')
@@ -78,6 +81,38 @@ def _transcribe_with_viet_lyrics_worker(worker, audio_path: Path, language, labe
     ]
     info = SimpleNamespace(language=payload.get('language'))
     return segments, info
+
+
+def _load_lyrics_for_audio(audio_path: Path):
+    lyrics_path = ROOT / 'lyrics' / f'{audio_path.stem}.txt'
+    if not lyrics_path.is_file():
+        return None
+    lyrics_text = lyrics_path.read_text(encoding='utf-8-sig').strip()
+    if not lyrics_text:
+        return None
+    log_progress(f'{audio_path.name} — using lyric prompt: {lyrics_path.name}')
+    return lyrics_text
+
+
+def _write_model_options(pass_number, pass_name, backend, model_name, device, language):
+    manifest_path = TRANSCRIPTS_DIR / f'__{pass_number}{pass_name}_model_options.json'
+    if manifest_path.exists():
+        return manifest_path
+    payload = {
+        'pass_number': pass_number,
+        'pass_name': pass_name,
+        'backend': backend,
+        'model': model_name,
+        'device': device,
+        'language': language,
+        'options': backends.get_options(backend),
+    }
+    manifest_path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2) + '\n',
+        encoding='utf-8',
+    )
+    log_progress(f'Wrote model options: {manifest_path.name}')
+    return manifest_path
 
 
 def main():
@@ -144,6 +179,29 @@ def main():
         help='Keep promotional phrases such as "subscribe" and "đăng ký" instead of removing them.',
     )
     parser.add_argument(
+        '--no-lyric-prompt',
+        action='store_true',
+        help='Ignore matching files under input/lyrics; this overrides --lyrics-mode.',
+    )
+    parser.add_argument(
+        '--lyrics-mode',
+        choices=('prompt', 'align', 'correct'),
+        default='prompt',
+        help=(
+            'How matching lyrics assist transcription: prompt biases decoding, align maps '
+            'authoritative lyric lines to ASR timing, and correct replaces ASR text while '
+            'preserving its segment timing. Ignored with --no-lyric-prompt.'
+        ),
+    )
+    parser.add_argument(
+        '--save-previous-results',
+        action='store_true',
+        help=(
+            'Preserve existing output/transcripts results by renaming the folder to '
+            'transcripts_01, transcripts_02, and so on before processing.'
+        ),
+    )
+    parser.add_argument(
         '--opening-threshold',
         type=float,
         default=20.0,
@@ -193,7 +251,9 @@ def main():
             parser.error('--file must name a supported audio file under input/.')
         files = [requested_path]
     log_progress(f'Found {len(files)} files to process')
-    clear_transcripts()
+    clear_transcripts(save_previous=args.save_previous_results)
+    if args.save_previous_results:
+        archive_demucs_results()
 
     if not files:
         end_time = datetime.now()
@@ -202,6 +262,15 @@ def main():
             log.write(summary + '\n')
         print(summary)
         return
+
+    _write_model_options(
+        1,
+        'initial',
+        args.backend,
+        args.model,
+        device,
+        args.language,
+    )
 
     log_progress(
         f'Loading {args.backend} model "{args.model}" '
@@ -221,6 +290,7 @@ def main():
         try:
             transcription_path = path
             used_original_fallback = False
+            lyrics_text = None if args.no_lyric_prompt else _load_lyrics_for_audio(path)
             if not args.no_vocal_separation:
                 try:
                     transcription_path = separate_vocals(
@@ -237,8 +307,14 @@ def main():
                     )
 
             segments, info = backends.transcribe_audio(
-                model, transcription_path, args.language, path.name, args.backend
+                model,
+                transcription_path,
+                args.language,
+                path.name,
+                args.backend,
+                lyrics_text=lyrics_text,
             )
+            segments = apply_lyrics_mode(segments, lyrics_text, args.lyrics_mode)
             candidate_segments, _, _ = filter_transcript_segments(segments, allow_promotions=args.keep_promotions)
 
             # Persist the first-pass transcript immediately so a slow/crashing retry
@@ -281,9 +357,23 @@ def main():
                     )
                 log_progress(f'{fallback_message} on the original audio')
                 try:
-                    segments, info = backends.transcribe_audio(
-                        model, path, args.language, path.name, args.backend
+                    _write_model_options(
+                        2,
+                        'original',
+                        args.backend,
+                        args.model,
+                        device,
+                        args.language,
                     )
+                    segments, info = backends.transcribe_audio(
+                        model,
+                        path,
+                        args.language,
+                        path.name,
+                        args.backend,
+                        lyrics_text=lyrics_text,
+                    )
+                    segments = apply_lyrics_mode(segments, lyrics_text, args.lyrics_mode)
                     # Persist this retry immediately so a crashing viet-lyrics fallback
                     # pass below never loses it, and keep it in a dedicated sibling file
                     # so it isn't lost once the fallback pass overwrites the main transcript.
@@ -318,6 +408,14 @@ def main():
                     # Runs after the original-audio retry above, so a fallback run is
                     # always the third pass (initial + original retry + viet-lyrics).
                     if fallback_worker is None:
+                        _write_model_options(
+                            3,
+                            'fallback',
+                            'viet-lyrics',
+                            args.fallback_viet_lyrics_model,
+                            device,
+                            args.language,
+                        )
                         log_progress(
                             f'Starting isolated viet-lyrics worker process for model '
                             f'"{args.fallback_viet_lyrics_model}" (first run may download several GB; '
@@ -334,8 +432,13 @@ def main():
                     )
                     try:
                         segments, info = _transcribe_with_viet_lyrics_worker(
-                            fallback_worker, transcription_path, args.language, path.name
+                            fallback_worker,
+                            transcription_path,
+                            args.language,
+                            path.name,
+                            lyrics_text=lyrics_text,
                         )
+                        segments = apply_lyrics_mode(segments, lyrics_text, args.lyrics_mode)
                         # Persist this pass immediately too, applying the same
                         # --keep-promotions filtering as the other two passes.
                         fallback_candidate_segments, _, _ = filter_transcript_segments(
