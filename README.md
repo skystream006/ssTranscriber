@@ -123,6 +123,8 @@ option groups are rejected, and **Reset defaults** restores the profile for the 
 The **Music** workspace plays supported audio directly from `input/`. For MP3 files containing an
 ID3 `SYLT` frame with absolute-millisecond timestamps, the lyric timeline follows playback and each
 line can be selected to seek to its timestamp. Files without embedded `SYLT` lyrics still play.
+Transcription jobs started from the Web UI automatically embed their final transcript as `USLT` and
+`SYLT` metadata in each processed source file.
 
 ## Usage
 
@@ -208,6 +210,7 @@ python .\process_audio_folder.py --device cuda:0 --backend viet-lyrics --model k
 | `--keep-promotions` | flag | off | Keeps known promotional phrases instead of stripping them out. |
 | `--no-lyric-prompt` | flag | off | Ignores matching files under `input/lyrics/` and overrides `--lyrics-mode`. |
 | `--lyrics-mode` | `prompt`, `align`, `correct` | `prompt` | `prompt` biases decoding; `align` maps authoritative lyric lines to ASR timing; `correct` replaces recognized text while preserving ASR segment timing. |
+| `--embed-lyrics` | flag | off | Embeds the final transcript into each processed source file as `USLT` and synchronized `SYLT` metadata. Web UI jobs enable this automatically. |
 | `--opening-threshold` | seconds (float) | `1.0` | If the first usable vocal segment starts later than this, retries on the original (non-separated) audio to recover a possibly clipped opening. |
 | `--fallback-viet-lyrics` | flag | off | When the `--opening-threshold` retry triggers, runs a 3rd pass with the `viet-lyrics` backend (on the separated vocals) after the primary `--backend`/`--model` retry on the original audio. |
 | `--fallback-viet-lyrics-model` | Hugging Face model ID | `kelvinbksoh/whisper-large-v2-vietnamese-lyrics-transcription` | Model used for `--fallback-viet-lyrics` retries. |
@@ -276,9 +279,10 @@ Both `input/` and `output/` are git-ignored and created automatically on startup
 
 ## Embed lyrics into the audio files
 
-`process_audio_folder.py` only writes transcript `.txt` files under `output/transcripts/` — it
-does **not** embed anything into the audio itself. Run `embed_lyrics.py` afterward (manually, once
-you're happy with the transcripts) to embed `USLT`/`SYLT` tags:
+By default, `process_audio_folder.py` only writes transcript `.txt` files under
+`output/transcripts/`. Web UI jobs pass `--embed-lyrics` and tag processed source files
+automatically. For a default CLI run, use `embed_lyrics.py` afterward (manually, once you're happy
+with the transcripts) to embed `USLT`/`SYLT` tags:
 
 ```powershell
 python .\embed_lyrics.py

@@ -164,7 +164,7 @@ class JobRequest(BaseModel):
     keep_promotions: bool = False
     use_lyrics: bool = True
     lyrics_mode: Literal['prompt', 'align', 'correct'] = 'prompt'
-    save_previous_results: bool = True
+    save_previous_results: bool = False
     opening_threshold: float = Field(default=1.0, ge=0, le=300)
     fallback_viet_lyrics: bool = False
     fallback_viet_lyrics_model: str = DEFAULT_MODELS['viet-lyrics']
@@ -235,6 +235,7 @@ def build_command(request: JobRequest):
         request.device,
         '--lyrics-mode',
         request.lyrics_mode,
+        '--embed-lyrics',
         '--demucs-mp3-bitrate',
         str(request.demucs_mp3_bitrate),
         '--opening-threshold',

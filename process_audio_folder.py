@@ -30,6 +30,7 @@ from transcribe_common import (
     prompt_for_device,
     resolve_device,
     separate_vocals,
+    write_lyrics_to_file,
     write_transcript_file,
 )
 
@@ -209,6 +210,11 @@ def main():
             'Preserve existing output/transcripts results by renaming the folder to '
             'transcripts_01, transcripts_02, and so on before processing.'
         ),
+    )
+    parser.add_argument(
+        '--embed-lyrics',
+        action='store_true',
+        help='Embed the final transcript into each source file as USLT and synchronized SYLT tags.',
     )
     parser.add_argument(
         '--opening-threshold',
@@ -526,6 +532,10 @@ def main():
             transcript_output = format_sylt_as_lrc(sylt_entries) if sylt_entries else transcript
             write_transcript_file(transcript_path, language, transcript_output)
 
+            if args.embed_lyrics:
+                write_lyrics_to_file(path, transcript, segments, language)
+                log_progress(f'{path.name} — embedded USLT + SYLT lyrics')
+
             if used_original_fallback and args.fallback_viet_lyrics:
                 # The original-audio retry's own result was already saved as
                 # "_2original.txttxt" above; this is the viet-lyrics fallback's result.
@@ -534,7 +544,8 @@ def main():
                 write_transcript_file(fallback_transcript_path, language, transcript_output)
                 log_progress(f'{path.name} — wrote viet-lyrics fallback transcript: {fallback_transcript_path.name}')
 
-            status = f'Success (transcript written, lang={language})'
+            result_label = 'transcript written + USLT/SYLT embedded' if args.embed_lyrics else 'transcript written'
+            status = f'Success ({result_label}, lang={language})'
             results.append((path.name, status))
             elapsed = (datetime.now() - file_start).total_seconds()
             log_progress(f'[{idx}/{len(files)}] {path.name} — {status} ({elapsed:.1f}s)')
