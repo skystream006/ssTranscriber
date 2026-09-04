@@ -63,6 +63,45 @@ def get_options(backend: str):
     }
 
 
+def _merge_option(current, override):
+    if isinstance(current, dict) and isinstance(override, dict):
+        merged = dict(current)
+        for key, value in override.items():
+            merged[key] = _merge_option(current.get(key), value) if key in current else value
+        return merged
+    if isinstance(current, tuple) and isinstance(override, list):
+        return tuple(override)
+    if isinstance(current, set) and isinstance(override, list):
+        return set(override)
+    if isinstance(current, Path) and isinstance(override, str):
+        return Path(override)
+    return override
+
+
+def apply_options(backend: str, overrides: dict):
+    module = _get_module(backend)
+    available = set(get_options(backend))
+    unknown = sorted(set(overrides) - available)
+    if unknown:
+        raise ValueError(f'Unknown {backend} backend option(s): {", ".join(unknown)}')
+    for name, value in overrides.items():
+        setattr(module, name, _merge_option(getattr(module, name), value))
+    return get_options(backend)
+
+
+def resolve_options(backend: str, overrides: dict):
+    module = _get_module(backend)
+    available = get_options(backend)
+    unknown = sorted(set(overrides) - set(available))
+    if unknown:
+        raise ValueError(f'Unknown {backend} backend option(s): {", ".join(unknown)}')
+    return {
+        name: _json_value(_merge_option(getattr(module, name), overrides.get(name)))
+        if name in overrides else _json_value(getattr(module, name))
+        for name in available
+    }
+
+
 def load_model(model_name: str, backend: str, device: str):
     return _get_module(backend).load(model_name, device)
 

@@ -34,11 +34,20 @@ from transcribe_common import (
 )
 
 
-def _start_viet_lyrics_worker(model_name: str, device: str):
+def _start_viet_lyrics_worker(model_name: str, device: str, backend_options: dict):
     # Runs in its own process; see viet_lyrics_worker.py for why this must
     # not share a process with the primary faster-whisper (CTranslate2) model.
     return subprocess.Popen(
-        [sys.executable, str(REPO_ROOT / 'viet_lyrics_worker.py'), '--model', model_name, '--device', device],
+        [
+            sys.executable,
+            str(REPO_ROOT / 'viet_lyrics_worker.py'),
+            '--model',
+            model_name,
+            '--device',
+            device,
+            '--backend-options-json',
+            json.dumps(backend_options, ensure_ascii=False),
+        ],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
@@ -94,7 +103,7 @@ def _load_lyrics_for_audio(audio_path: Path):
     return lyrics_text
 
 
-def _write_model_options(pass_number, pass_name, backend, model_name, device, language):
+def _write_model_options(pass_number, pass_name, backend, model_name, device, language, options=None):
     manifest_path = TRANSCRIPTS_DIR / f'__{pass_number}{pass_name}_model_options.json'
     if manifest_path.exists():
         return manifest_path
@@ -105,7 +114,7 @@ def _write_model_options(pass_number, pass_name, backend, model_name, device, la
         'model': model_name,
         'device': device,
         'language': language,
-        'options': backends.get_options(backend),
+        'options': options if options is not None else backends.get_options(backend),
     }
     manifest_path.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2) + '\n',
@@ -226,7 +235,31 @@ def main():
         default='kelvinbksoh/whisper-large-v2-vietnamese-lyrics-transcription',
         help='Model used for --fallback-viet-lyrics retries.',
     )
+    parser.add_argument(
+        '--backend-options-json',
+        type=json.loads,
+        default={},
+        help='JSON object overriding the selected backend profile options.',
+    )
+    parser.add_argument(
+        '--fallback-viet-lyrics-options-json',
+        type=json.loads,
+        default={},
+        help='JSON object overriding the viet-lyrics fallback backend profile options.',
+    )
     args = parser.parse_args()
+
+    if not isinstance(args.backend_options_json, dict):
+        parser.error('--backend-options-json must contain a JSON object.')
+    if not isinstance(args.fallback_viet_lyrics_options_json, dict):
+        parser.error('--fallback-viet-lyrics-options-json must contain a JSON object.')
+    try:
+        fallback_options = backends.resolve_options(
+            'viet-lyrics', args.fallback_viet_lyrics_options_json
+        )
+        backends.apply_options(args.backend, args.backend_options_json)
+    except ValueError as options_error:
+        parser.error(str(options_error))
 
     LOG_PATH.write_text('', encoding='utf-8')
     log_progress('Processing started')
@@ -415,6 +448,7 @@ def main():
                             args.fallback_viet_lyrics_model,
                             device,
                             args.language,
+                            options=fallback_options,
                         )
                         log_progress(
                             f'Starting isolated viet-lyrics worker process for model '
@@ -425,7 +459,11 @@ def main():
                         with progress_heartbeat(
                             f'Loading fallback viet-lyrics model "{args.fallback_viet_lyrics_model}"'
                         ):
-                            fallback_worker = _start_viet_lyrics_worker(args.fallback_viet_lyrics_model, device)
+                            fallback_worker = _start_viet_lyrics_worker(
+                                args.fallback_viet_lyrics_model,
+                                device,
+                                args.fallback_viet_lyrics_options_json,
+                            )
                     log_progress(
                         f'{path.name} — retrying transcription on the separated vocals using '
                         f'viet-lyrics model "{args.fallback_viet_lyrics_model}" (isolated process)'

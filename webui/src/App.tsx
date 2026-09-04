@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
-import { flushSync } from 'react-dom'
+import { createPortal, flushSync } from 'react-dom'
 import {
   Activity,
   Archive,
@@ -16,7 +16,10 @@ import {
   FolderOpen,
   Gauge,
   History,
+  Info,
   LoaderCircle,
+  Maximize2,
+  Minimize2,
   Music2,
   Palette,
   Play,
@@ -60,6 +63,8 @@ type JobRequest = {
   opening_threshold: number
   fallback_viet_lyrics: boolean
   fallback_viet_lyrics_model: string
+  backend_options: Record<string, unknown>
+  fallback_viet_lyrics_options: Record<string, unknown>
 }
 
 type Job = {
@@ -96,6 +101,8 @@ const defaultForm: JobRequest = {
   opening_threshold: 1,
   fallback_viet_lyrics: false,
   fallback_viet_lyrics_model: 'kelvinbksoh/whisper-large-v2-vietnamese-lyrics-transcription',
+  backend_options: {},
+  fallback_viet_lyrics_options: {},
 }
 
 const terminalStatuses: JobStatus[] = ['completed', 'failed', 'cancelled']
@@ -143,13 +150,91 @@ function progressFor(job: Job | null) {
   return matches.length ? Number(matches.at(-1)?.[1]) : job.status === 'running' ? 8 : 0
 }
 
-function Toggle({ checked, onChange, label }: { checked: boolean; onChange: (checked: boolean) => void; label: string }) {
+function profileText(options: Record<string, unknown> | undefined) {
+  return JSON.stringify(options ?? {}, null, 2)
+}
+
+function parseProfile(label: string, value: string) {
+  let profile: unknown
+  try {
+    profile = JSON.parse(value)
+  } catch (reason) {
+    throw new Error(`${label} must be valid JSON: ${reason instanceof Error ? reason.message : String(reason)}`)
+  }
+  if (!profile || typeof profile !== 'object' || Array.isArray(profile)) {
+    throw new Error(`${label} must be a JSON object.`)
+  }
+  return profile as Record<string, unknown>
+}
+
+function InfoTip({ text }: { text: string }) {
+  const tooltipId = useId()
   return (
-    <label className="toggle-row">
-      <span>{label}</span>
-      <input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} />
+    <span
+      className="info-tip"
+      role="button"
+      tabIndex={0}
+      aria-label="More information"
+      aria-describedby={tooltipId}
+      onClick={(event) => {
+        event.preventDefault()
+        event.stopPropagation()
+      }}
+    >
+      <Info aria-hidden="true" />
+      <span className="info-tooltip" id={tooltipId} role="tooltip">{text}</span>
+    </span>
+  )
+}
+
+function FieldLabel({ children, info }: { children: string; info: string }) {
+  return <span className="field-label">{children}<InfoTip text={info} /></span>
+}
+
+function Toggle({ checked, onChange, label, info, disabled = false }: { checked: boolean; onChange: (checked: boolean) => void; label: string; info: string; disabled?: boolean }) {
+  return (
+    <label className={`toggle-row ${disabled ? 'disabled' : ''}`}>
+      <span className="toggle-label">{label}<InfoTip text={info} /></span>
+      <input type="checkbox" checked={checked} disabled={disabled} onChange={(event) => onChange(event.target.checked)} />
       <span className="toggle" aria-hidden="true" />
     </label>
+  )
+}
+
+function TranscriptGroup({
+  folder,
+  files,
+  selectedTranscript,
+  onOpen,
+}: {
+  folder: string
+  files: Transcript[]
+  selectedTranscript: string | null
+  onOpen: (transcript: Transcript) => void
+}) {
+  const [open, setOpen] = useState(folder === 'transcripts' || selectedTranscript?.startsWith(`${folder}/`))
+
+  return (
+    <details className="result-group" open={open} onToggle={(event) => setOpen(event.currentTarget.open)}>
+      <summary>
+        <FolderOpen />
+        <span><strong>{folder}</strong><small>{folder === 'transcripts' ? 'Current results' : 'Archived results'}</small></span>
+        <span className="folder-count">{files.length}</span>
+        <ChevronDown />
+      </summary>
+      <div className="result-group-files">
+        {files.map((transcript) => {
+          const relativePath = transcript.path.split('/').slice(1).join('/')
+          return (
+            <button key={transcript.path} className={selectedTranscript === transcript.path ? 'selected' : ''} onClick={() => onOpen(transcript)}>
+              <FileAudio />
+              <span><strong>{relativePath}</strong><small>{(transcript.size / 1024).toFixed(1)} KB</small></span>
+              <time>{timeLabel(transcript.modified_at)}</time>
+            </button>
+          )
+        })}
+      </div>
+    </details>
   )
 }
 
@@ -169,6 +254,9 @@ export default function App() {
   const [view, setView] = useState<'run' | 'results'>('run')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [consoleExpanded, setConsoleExpanded] = useState(false)
+  const [backendProfileText, setBackendProfileText] = useState('{}')
+  const [fallbackProfileText, setFallbackProfileText] = useState('{}')
   const logRef = useRef<HTMLPreElement>(null)
   const themeMenuRef = useRef<HTMLDetailsElement>(null)
 
@@ -193,6 +281,8 @@ export default function App() {
     ])
       .then(([configResult, fileResult, jobResult, transcriptResult]) => {
         setConfig(configResult)
+        setBackendProfileText(profileText(configResult.backends[defaultForm.backend]?.options))
+        setFallbackProfileText(profileText(configResult.backends['viet-lyrics']?.options))
         setFiles(fileResult.files)
         setJobs(jobResult)
         setTranscripts(transcriptResult.files)
@@ -223,16 +313,32 @@ export default function App() {
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight
   }, [selectedJob?.logs])
 
+  useEffect(() => {
+    if (!consoleExpanded) return
+    const previousOverflow = document.body.style.overflow
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setConsoleExpanded(false)
+    }
+    document.body.style.overflow = 'hidden'
+    document.addEventListener('keydown', closeOnEscape)
+    return () => {
+      document.body.style.overflow = previousOverflow
+      document.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [consoleExpanded])
+
   const update = <Key extends keyof JobRequest>(key: Key, value: JobRequest[Key]) => {
     setForm((current) => ({ ...current, [key]: value }))
   }
 
   const changeBackend = (backend: string) => {
     const backendConfig = config?.backends[backend]
+    setBackendProfileText(profileText(backendConfig?.options))
     setForm((current) => ({
       ...current,
       backend,
       model: backendConfig?.default_model ?? current.model,
+      fallback_viet_lyrics: backend === 'viet-lyrics' ? false : current.fallback_viet_lyrics,
     }))
   }
 
@@ -241,10 +347,16 @@ export default function App() {
     setBusy(true)
     setError(null)
     try {
+      const backendOptions = parseProfile('Backend profile', backendProfileText)
+      const fallbackOptions = parseProfile('Fallback profile', fallbackProfileText)
       const job = await api<Job>('/api/jobs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(form),
+        body: JSON.stringify({
+          ...form,
+          backend_options: backendOptions,
+          fallback_viet_lyrics_options: fallbackOptions,
+        }),
       })
       setSelectedJob(job)
       setJobs((current) => [job, ...current])
@@ -323,6 +435,34 @@ export default function App() {
   const active = selectedJob && !terminalStatuses.includes(selectedJob.status)
   const progress = progressFor(selectedJob)
   const backendConfig = config?.backends[form.backend]
+  const fallbackModels = config?.backends['viet-lyrics']?.models ?? []
+  const processConsole = selectedJob ? (
+    <div className={`console ${consoleExpanded ? 'expanded' : ''}`}>
+      <div className="console-head">
+        <span><TerminalSquare /> Process output</span>
+        <div className="console-actions">
+          <code>{selectedJob.id}</code>
+          <button
+            type="button"
+            aria-label={consoleExpanded ? 'Exit full window' : 'Expand process output'}
+            aria-pressed={consoleExpanded}
+            title={consoleExpanded ? 'Exit full window (Esc)' : 'Expand process output'}
+            onClick={() => setConsoleExpanded((current) => !current)}
+          >
+            {consoleExpanded ? <Minimize2 /> : <Maximize2 />}
+          </button>
+        </div>
+      </div>
+      <pre ref={logRef}>{selectedJob.logs?.length ? selectedJob.logs.join('\n') : 'Waiting for process output...'}</pre>
+    </div>
+  ) : null
+  const transcriptGroups = Object.entries(
+    transcripts.reduce<Record<string, Transcript[]>>((groups, transcript) => {
+      const folder = transcript.path.split('/')[0]
+      groups[folder] = [...(groups[folder] ?? []), transcript]
+      return groups
+    }, {}),
+  )
 
   return (
     <div className="app-shell">
@@ -402,7 +542,7 @@ export default function App() {
                   </button>
                 </div>
                 <label className="field full">
-                  <span>Audio selection</span>
+                  <FieldLabel info="Choose one supported audio file from input/, or select all files to process the complete folder.">Audio selection</FieldLabel>
                   <div className="select-wrap">
                     <FolderOpen />
                     <select value={form.file ?? ''} onChange={(event) => update('file', event.target.value || null)}>
@@ -421,29 +561,29 @@ export default function App() {
                 </div>
                 <div className="field-grid">
                   <label className="field">
-                    <span>Backend</span>
+                    <FieldLabel info="Select the speech-recognition engine. Faster-Whisper is the general default; PhoWhisper and Viet Lyrics specialize in Vietnamese; Parakeet and SenseVoice require their optional runtimes.">Backend</FieldLabel>
                     <select value={form.backend} onChange={(event) => changeBackend(event.target.value)}>
                       {Object.keys(config?.backends ?? {}).map((backend) => <option key={backend}>{backend}</option>)}
                     </select>
                   </label>
                   <label className="field">
-                    <span>Device</span>
+                    <FieldLabel info="Choose where inference runs. Automatic prefers an available GPU, CPU uses no CUDA, and an NVIDIA device runs the model on that specific GPU.">Device</FieldLabel>
                     <select value={form.device} onChange={(event) => update('device', event.target.value)}>
                       {(config?.devices ?? []).map((device) => <option key={device.value} value={device.value}>{device.label}</option>)}
                     </select>
                   </label>
                   <label className="field full">
-                    <span>Model</span>
+                    <FieldLabel info="Select the checkpoint used by the current backend. Larger models generally improve accuracy but take more memory and processing time.">Model</FieldLabel>
                     <select value={form.model} onChange={(event) => update('model', event.target.value)}>
                       {(backendConfig?.models ?? [form.model]).map((model) => <option key={model}>{model}</option>)}
                     </select>
                   </label>
                   <label className="field">
-                    <span>Language</span>
+                    <FieldLabel info="Enter an ISO language code such as vi or en to force recognition, or leave it empty for automatic language detection.">Language</FieldLabel>
                     <input value={form.language ?? ''} placeholder="Auto" maxLength={12} onChange={(event) => update('language', event.target.value || null)} />
                   </label>
                   <label className="field">
-                    <span>Opening threshold</span>
+                    <FieldLabel info="If separated-vocal transcription starts later than this many seconds, retry the original mix to recover a potentially clipped opening.">Opening threshold</FieldLabel>
                     <div className="unit-input"><input type="number" min="0" max="300" step="0.5" value={form.opening_threshold} onChange={(event) => update('opening_threshold', Number(event.target.value))} /><span>sec</span></div>
                   </label>
                 </div>
@@ -454,7 +594,8 @@ export default function App() {
                   <span className="step">03</span>
                   <div><h2>Lyrics assist</h2><p>Same-stem text under input/lyrics</p></div>
                 </div>
-                <Toggle checked={form.use_lyrics} onChange={(value) => update('use_lyrics', value)} label="Use known lyrics" />
+                <Toggle checked={form.use_lyrics} onChange={(value) => update('use_lyrics', value)} label="Use known lyrics" info="Use a same-stem UTF-8 text file under input/lyrics to guide, align, or correct the recognized lyrics." />
+                <div className="option-label">Lyrics mode<InfoTip text="Prompt biases recognition toward known words. Align maps authoritative lyric lines onto ASR timing. Correct replaces recognized text while preserving ASR segment timing." /></div>
                 <div className={`segmented ${!form.use_lyrics ? 'disabled' : ''}`}>
                   {(['prompt', 'align', 'correct'] as const).map((mode) => (
                     <button key={mode} type="button" disabled={!form.use_lyrics} className={form.lyrics_mode === mode ? 'active' : ''} onClick={() => update('lyrics_mode', mode)}>{mode}</button>
@@ -462,23 +603,58 @@ export default function App() {
                 </div>
               </section>
 
-              <details className="advanced panel-section">
+              <details className="advanced panel-section" open>
                 <summary><WandSparkles /> Advanced <ChevronDown /></summary>
                 <div className="advanced-body">
-                  <Toggle checked={form.vocal_separation} onChange={(value) => update('vocal_separation', value)} label="Separate vocals with Demucs" />
-                  <Toggle checked={form.demucs_mp3} onChange={(value) => update('demucs_mp3', value)} label="Store Demucs stem as MP3" />
-                  <Toggle checked={form.keep_promotions} onChange={(value) => update('keep_promotions', value)} label="Keep promotional phrases" />
-                  <Toggle checked={form.save_previous_results} onChange={(value) => update('save_previous_results', value)} label="Archive previous results" />
-                  <Toggle checked={form.fallback_viet_lyrics} onChange={(value) => update('fallback_viet_lyrics', value)} label="Viet Lyrics fallback pass" />
+                  <Toggle checked={form.vocal_separation} onChange={(value) => update('vocal_separation', value)} label="Separate vocals with Demucs" info="Isolate the vocal stem before recognition. This often improves song transcription but adds processing time and can occasionally clip quiet openings." />
+                  <Toggle checked={form.demucs_mp3} onChange={(value) => update('demucs_mp3', value)} label="Store Demucs stem as MP3" info="Save separated vocals as a smaller lossy MP3 instead of the default WAV file." />
+                  <Toggle checked={form.keep_promotions} onChange={(value) => update('keep_promotions', value)} label="Keep promotional phrases" info="Retain phrases such as subscribe, like, and thanks for watching instead of filtering them from transcripts." />
+                  <Toggle checked={form.save_previous_results} onChange={(value) => update('save_previous_results', value)} label="Archive previous results" info="Rename existing transcript and Demucs folders to numbered archives before creating results for this run." />
+                  <Toggle
+                    checked={form.fallback_viet_lyrics}
+                    disabled={form.backend === 'viet-lyrics'}
+                    onChange={(value) => update('fallback_viet_lyrics', value)}
+                    label="Viet Lyrics fallback pass"
+                    info={form.backend === 'viet-lyrics' ? 'Unavailable because Viet Lyrics is already the primary transcription backend.' : 'When the opening retry triggers, run an additional Vietnamese lyrics model pass on the separated vocals.'}
+                  />
                   {form.demucs_mp3 && (
-                    <label className="field"><span>Demucs bitrate</span><div className="unit-input"><input type="number" min="64" max="512" value={form.demucs_mp3_bitrate} onChange={(event) => update('demucs_mp3_bitrate', Number(event.target.value))} /><span>kbps</span></div></label>
+                    <label className="field"><FieldLabel info="Set the MP3 bitrate for saved Demucs stems. Higher values preserve more audio detail but create larger files.">Demucs bitrate</FieldLabel><div className="unit-input"><input type="number" min="64" max="512" value={form.demucs_mp3_bitrate} onChange={(event) => update('demucs_mp3_bitrate', Number(event.target.value))} /><span>kbps</span></div></label>
                   )}
                   {form.fallback_viet_lyrics && (
-                    <label className="field full"><span>Fallback model</span><input value={form.fallback_viet_lyrics_model} onChange={(event) => update('fallback_viet_lyrics_model', event.target.value)} /></label>
+                    <>
+                      <label className="field full">
+                        <FieldLabel info="Choose a suggested Viet Lyrics checkpoint or enter any custom Hugging Face model ID.">Fallback model</FieldLabel>
+                        <input
+                          list="fallback-model-options"
+                          value={form.fallback_viet_lyrics_model}
+                          autoComplete="off"
+                          onChange={(event) => update('fallback_viet_lyrics_model', event.target.value)}
+                        />
+                        <datalist id="fallback-model-options">
+                          {fallbackModels.map((model) => <option key={model} value={model} />)}
+                        </datalist>
+                      </label>
+                      <details className="profile-details">
+                        <summary>Fallback profile <span>{Object.keys(config?.backends['viet-lyrics']?.options ?? {}).length} groups</span></summary>
+                        <div className="profile-editor">
+                          <label className="field full">
+                            <FieldLabel info="Edit the JSON options passed to the isolated Viet Lyrics fallback backend. Nested option groups are merged with backend defaults.">Fallback backend options</FieldLabel>
+                            <textarea spellCheck={false} value={fallbackProfileText} onChange={(event) => setFallbackProfileText(event.target.value)} />
+                          </label>
+                          <button type="button" className="profile-reset" onClick={() => setFallbackProfileText(profileText(config?.backends['viet-lyrics']?.options))}>Reset defaults</button>
+                        </div>
+                      </details>
+                    </>
                   )}
                   <details className="profile-details">
                     <summary>Backend profile <span>{Object.keys(backendConfig?.options ?? {}).length} groups</span></summary>
-                    <pre>{JSON.stringify(backendConfig?.options ?? {}, null, 2)}</pre>
+                    <div className="profile-editor">
+                      <label className="field full">
+                        <FieldLabel info="Edit the JSON options passed to the selected backend. Nested option groups are merged with backend defaults.">Primary backend options</FieldLabel>
+                        <textarea spellCheck={false} value={backendProfileText} onChange={(event) => setBackendProfileText(event.target.value)} />
+                      </label>
+                      <button type="button" className="profile-reset" onClick={() => setBackendProfileText(profileText(backendConfig?.options))}>Reset defaults</button>
+                    </div>
                   </details>
                 </div>
               </details>
@@ -503,10 +679,7 @@ export default function App() {
                     <div className="progress-track"><span style={{ width: `${progress}%` }} /></div>
                     <div className="job-meta"><span><Cpu /> {selectedJob.request.device}</span><span><Clock3 /> {timeLabel(selectedJob.started_at)}</span><span><Gauge /> {selectedJob.request.model}</span></div>
                   </div>
-                  <div className="console">
-                    <div className="console-head"><span><TerminalSquare /> Process output</span><code>{selectedJob.id}</code></div>
-                    <pre ref={logRef}>{selectedJob.logs?.length ? selectedJob.logs.join('\n') : 'Waiting for process output...'}</pre>
-                  </div>
+                  {consoleExpanded ? createPortal(processConsole, document.body) : processConsole}
                   {active && <button className="stop-button" type="button" disabled={busy} onClick={cancel}><Square /> Stop process</button>}
                 </>
               ) : (
@@ -528,13 +701,9 @@ export default function App() {
         ) : (
           <div className="results-layout">
             <section className="result-list">
-              <div className="result-toolbar"><span><FileText /> {transcripts.length} artifacts</span><button className="icon-button" title="Refresh results" onClick={() => refreshTranscripts()}><RefreshCw /></button></div>
-              {transcripts.map((transcript) => (
-                <button key={transcript.path} className={selectedTranscript === transcript.path ? 'selected' : ''} onClick={() => openTranscript(transcript)}>
-                  <FileAudio />
-                  <span><strong>{transcript.path.split('/').at(-1)}</strong><small>{transcript.path.split('/')[0]} · {(transcript.size / 1024).toFixed(1)} KB</small></span>
-                  <time>{timeLabel(transcript.modified_at)}</time>
-                </button>
+              <div className="result-toolbar"><span><FileText /> {transcripts.length} artifacts in {transcriptGroups.length} folders</span><button className="icon-button" title="Refresh results" onClick={() => refreshTranscripts()}><RefreshCw /></button></div>
+              {transcriptGroups.map(([folder, files]) => (
+                <TranscriptGroup key={folder} folder={folder} files={files} selectedTranscript={selectedTranscript} onOpen={openTranscript} />
               ))}
               {!transcripts.length && <div className="empty-state"><FileText /><h3>No transcripts yet</h3></div>}
             </section>

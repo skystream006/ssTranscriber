@@ -331,20 +331,17 @@ def prompt_for_device(devices):
 
 
 def retry_on_windows_file_lock(func, retries=6, initial_delay=0.5, label=None):
-    # NeMo extracts .nemo checkpoints (tar archives) into a fresh temp directory
-    # on every run. On Windows, newly created files in that directory are
-    # commonly locked for a short time by antivirus/real-time scanning or the
-    # search indexer, or by a lingering handle NeMo itself keeps open for lazy
-    # access (e.g. manifest.json, tokenizer files). Either way this raises
-    # OSError WinError 32. A short retry loop with backoff resolves both
-    # cases; gc.collect() additionally releases any stale Python-held handle.
+    # Windows reports transient file handles as either sharing violations
+    # (WinError 32) or access denied (WinError 5), including directory renames.
+    # A short retry loop handles antivirus/indexer scans and recently exited
+    # child processes; gc.collect() also releases stale Python-held handles.
     last_exc = None
     delay = initial_delay
     for attempt in range(retries):
         try:
             return func()
         except OSError as exc:
-            if getattr(exc, 'winerror', None) != 32:
+            if os.name != 'nt' or getattr(exc, 'winerror', None) not in {5, 32}:
                 raise
             last_exc = exc
             if label:
@@ -403,7 +400,10 @@ def clear_transcripts(save_previous=False):
         while True:
             archive_dir = TRANSCRIPTS_DIR.with_name(f'{TRANSCRIPTS_DIR.name}_{suffix:02d}')
             if not archive_dir.exists():
-                TRANSCRIPTS_DIR.rename(archive_dir)
+                retry_on_windows_file_lock(
+                    lambda: TRANSCRIPTS_DIR.rename(archive_dir),
+                    label='Archiving previous transcripts',
+                )
                 TRANSCRIPTS_DIR.mkdir(parents=True)
                 log_progress(f'Archived previous transcripts: {archive_dir}')
                 return archive_dir
@@ -428,8 +428,12 @@ def archive_demucs_results():
     while True:
         archive_dir = demucs_dir.with_name(f'{demucs_dir.name}_{suffix:02d}')
         if not archive_dir.exists():
-            demucs_dir.rename(archive_dir)
-            demucs_dir.mkdir(parents=True)
+            archive_dir.mkdir()
+            for child in demucs_dir.iterdir():
+                retry_on_windows_file_lock(
+                    lambda child=child: child.rename(archive_dir / child.name),
+                    label=f'Archiving previous Demucs result ({child.name})',
+                )
             log_progress(f'Archived previous Demucs results: {archive_dir}')
             return archive_dir
         suffix += 1

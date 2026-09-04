@@ -115,6 +115,11 @@ npm --prefix .\webui run dev
 The API binds to localhost by default. Job state is held in memory and resets when the API server
 restarts; transcript files and archived output remain on disk.
 
+Under **Advanced**, expand **Backend profile** to edit the selected backend's runtime options as
+JSON. Enabling **Viet Lyrics fallback pass** adds an independent **Fallback profile** for the
+isolated fallback worker. Nested objects are merged with the displayed defaults, unknown top-level
+option groups are rejected, and **Reset defaults** restores the profile for the selected backend.
+
 ## Usage
 
 1. Drop audio files into `input/` (subfolders are scanned recursively).
@@ -202,6 +207,8 @@ python .\process_audio_folder.py --device cuda:0 --backend viet-lyrics --model k
 | `--opening-threshold` | seconds (float) | `1.0` | If the first usable vocal segment starts later than this, retries on the original (non-separated) audio to recover a possibly clipped opening. |
 | `--fallback-viet-lyrics` | flag | off | When the `--opening-threshold` retry triggers, runs a 3rd pass with the `viet-lyrics` backend (on the separated vocals) after the primary `--backend`/`--model` retry on the original audio. |
 | `--fallback-viet-lyrics-model` | Hugging Face model ID | `kelvinbksoh/whisper-large-v2-vietnamese-lyrics-transcription` | Model used for `--fallback-viet-lyrics` retries. |
+| `--backend-options-json` | JSON object | `{}` | Overrides option groups for the selected primary backend. Nested objects merge with backend defaults. |
+| `--fallback-viet-lyrics-options-json` | JSON object | `{}` | Overrides option groups passed to the isolated Viet Lyrics fallback worker. |
 
 Common built-in model lists:
 

@@ -10,7 +10,7 @@ import uuid
 from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -102,6 +102,16 @@ def backend_metadata():
     return metadata
 
 
+def validate_profile_options(backend: str, options: dict, label: str):
+    available = set(backend_metadata()[backend]['options'])
+    unknown = sorted(set(options) - available)
+    if unknown:
+        raise HTTPException(
+            status_code=422,
+            detail=f'Unknown {label} option(s): {", ".join(unknown)}',
+        )
+
+
 def available_devices():
     devices = [{'value': 'auto', 'label': 'Automatic'}, {'value': 'cpu', 'label': 'CPU'}]
     try:
@@ -150,6 +160,8 @@ class JobRequest(BaseModel):
     opening_threshold: float = Field(default=1.0, ge=0, le=300)
     fallback_viet_lyrics: bool = False
     fallback_viet_lyrics_model: str = DEFAULT_MODELS['viet-lyrics']
+    backend_options: dict[str, Any] = Field(default_factory=dict)
+    fallback_viet_lyrics_options: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator('backend')
     @classmethod
@@ -221,6 +233,10 @@ def build_command(request: JobRequest):
         str(request.opening_threshold),
         '--fallback-viet-lyrics-model',
         request.fallback_viet_lyrics_model,
+        '--backend-options-json',
+        json.dumps(request.backend_options, ensure_ascii=False, separators=(',', ':')),
+        '--fallback-viet-lyrics-options-json',
+        json.dumps(request.fallback_viet_lyrics_options, ensure_ascii=False, separators=(',', ':')),
     ]
     if request.file:
         command.extend(['--file', request.file])
@@ -302,6 +318,10 @@ def get_jobs():
 
 @app.post('/api/jobs', status_code=202)
 async def create_job(request: JobRequest):
+    validate_profile_options(request.backend, request.backend_options, 'backend profile')
+    validate_profile_options(
+        'viet-lyrics', request.fallback_viet_lyrics_options, 'fallback profile'
+    )
     job = Job(request)
     jobs[job.id] = job
     asyncio.create_task(run_job(job))

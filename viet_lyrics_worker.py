@@ -7,9 +7,8 @@ crashes on Windows with "Could not load symbol cudnnGetLibConfig. Error
 code 127", because the two runtimes bundle different, ABI-incompatible
 cuDNN builds that collide once both are loaded into that process.
 
-Only backends.viet_lyrics_backend is imported here (never the `backends`
-package's other modules), so faster_whisper/ctranslate2 never loads in this
-process either.
+The backend registry imports only viet_lyrics_backend on demand, so
+faster_whisper/ctranslate2 never loads in this process either.
 
 Protocol: after startup (which loads the model once), reads one JSON object
 per line from stdin: {"audio_path": str, "language": str|null, "label": str,
@@ -23,7 +22,7 @@ import json
 import sys
 from pathlib import Path
 
-from backends import viet_lyrics_backend
+import backends
 
 RESULT_PREFIX = '__ASR_RESULT__:'
 
@@ -32,10 +31,14 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--model', required=True)
     parser.add_argument('--device', required=True)
+    parser.add_argument('--backend-options-json', type=json.loads, default={})
     args = parser.parse_args()
 
     try:
-        model = viet_lyrics_backend.load(args.model, args.device)
+        if not isinstance(args.backend_options_json, dict):
+            raise ValueError('--backend-options-json must contain a JSON object')
+        backends.apply_options('viet-lyrics', args.backend_options_json)
+        model = backends.load_model(args.model, 'viet-lyrics', args.device)
     except Exception as exc:
         print(f'{RESULT_PREFIX}ERROR:failed to load model: {exc}', flush=True)
         sys.exit(1)
@@ -47,11 +50,12 @@ def main():
         request = json.loads(raw_line)
         result_path = Path(request['result_path'])
         try:
-            segments, info = viet_lyrics_backend.transcribe(
+            segments, info = backends.transcribe_audio(
                 model,
                 Path(request['audio_path']),
                 request.get('language'),
                 request.get('label') or Path(request['audio_path']).name,
+                'viet-lyrics',
                 lyrics_text=request.get('lyrics_text'),
             )
             payload = {
