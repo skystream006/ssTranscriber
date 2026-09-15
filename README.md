@@ -99,6 +99,7 @@ controls do not apply to uploads.
   | `file` | Yes | Song file in one of the supported audio formats. |
   | `lyrics` | No | Plain-text lyrics. Nonblank data automatically enables known lyrics; absent or blank data disables them. |
   | `lyrics_mode` | No | `align` (default), `prompt`, or `correct`. Ignored when no lyrics are supplied. |
+  | `language` | No | Two-letter ISO 639-1 language code such as `vi` or `en` (case-insensitive). Overrides the saved language for this job only. Omitted or empty uses the saved endpoint language, including auto-detection when that default is unset. |
 
 The response is the uploaded song with completed USLT/SYLT lyrics embedding and an
 attachment filename (`application/octet-stream`). If **Copy no-vocals song** is enabled,

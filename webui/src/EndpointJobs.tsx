@@ -16,6 +16,7 @@ type EndpointJob = {
     backend: string
     model: string
     device: string
+    language: string | null
     use_lyrics: boolean
     lyrics_mode: string
     copy_no_vocals: boolean
@@ -143,6 +144,7 @@ export default function EndpointJobs() {
               <div className="job-meta"><span><Cpu /> {selected.request.device}</span><span><Gauge /> {selected.request.backend}</span></div>
               <dl className="endpoint-job-metadata">
                 <dt>Model</dt><dd>{selected.request.model}</dd>
+                <dt>Language</dt><dd>{selected.request.language || 'Auto-detect'}</dd>
                 <dt>Received</dt><dd>{timeLabel(selected.created_at)}</dd>
                 <dt>Started</dt><dd>{timeLabel(selected.started_at)}</dd>
                 <dt>Finished</dt><dd>{timeLabel(selected.finished_at)}</dd>

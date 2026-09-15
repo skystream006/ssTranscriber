@@ -962,6 +962,7 @@ export default function App() {
                   <dt>file <small>required</small></dt><dd>A supported song file.</dd>
                   <dt>lyrics <small>optional</small></dt><dd>Plain-text lyrics. Omit or leave blank to transcribe without known lyrics.</dd>
                   <dt>lyrics_mode <small>optional</small></dt><dd><code>align</code> (default), <code>prompt</code>, or <code>correct</code>.</dd>
+                  <dt>language <small>optional</small></dt><dd>Two-letter ISO 639-1 code, such as <code>vi</code> or <code>en</code>. Overrides the saved language for this job only. Omit or leave empty to use the endpoint default.</dd>
                 </dl>
                 <h3>Download response</h3>
                 <p>{form.copy_no_vocals ? 'ZIP archive containing the embedded song and a [NoVocals] MP3 with embedded lyrics.' : 'The original uploaded song with the completed transcription embedded as USLT and synchronized SYLT lyrics.'}</p>

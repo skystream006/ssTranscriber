@@ -567,6 +567,10 @@ async def transcribe_upload(
     file: UploadFile = File(..., description='Song file to transcribe and embed.'),
     lyrics: str | None = Form(None, description='Optional plain-text lyrics; enables known lyrics automatically.'),
     lyrics_mode: Literal['prompt', 'align', 'correct'] = Form('align'),
+    language: str | None = Form(
+        None, pattern=r'^[A-Za-z]{2}$',
+        description='Optional ISO 639-1 language code (e.g. vi, en). Overrides the saved language for this job only; omitted or empty uses the saved default.',
+    ),
 ):
     """Wait for processing using saved endpoint defaults, then download the completed audio."""
     work_dir = None
@@ -580,7 +584,10 @@ async def transcribe_upload(
         settings = await asyncio.to_thread(get_endpoint_config)
         validate_processing_profiles(settings)
         lyrics = lyrics.strip().lstrip('\ufeff').strip() if lyrics else None
-        request = JobRequest(**settings.model_dump(), use_lyrics=bool(lyrics), lyrics_mode=lyrics_mode,
+        processing_options = settings.model_dump()
+        if language is not None:
+            processing_options['language'] = language.lower()
+        request = JobRequest(**processing_options, use_lyrics=bool(lyrics), lyrics_mode=lyrics_mode,
                              save_previous_results=False)
         work_dir = Path(tempfile.mkdtemp(prefix='ss-transcriber-api-'))
         song = await asyncio.to_thread(prepare_upload, work_dir, file.file, suffix, lyrics)

@@ -130,6 +130,35 @@ class UploadAPITests(unittest.TestCase):
                 self.assertEqual(self.seen_jobs[-1].request.lyrics_mode, mode)
                 self.assert_clean()
 
+    def test_language_override_is_job_specific(self):
+        self.settings(language='vi')
+        response = self.upload(language='EN')
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(self.seen_jobs[-1].request.language, 'en')
+        tags = ID3(io.BytesIO(response.content))
+        self.assertEqual(tags.getall('USLT')[0].lang, 'eng')
+        detail = self.client.get(f'/api/endpoint-jobs/{self.seen_jobs[-1].id}').json()
+        self.assertEqual(detail['request']['language'], 'en')
+        self.assertEqual(self.client.get('/api/endpoint-config').json()['language'], 'vi')
+        self.assert_clean()
+
+    def test_omitted_or_empty_language_uses_saved_default(self):
+        for default in ('vi', None):
+            self.settings(language=default)
+            for data in ({}, {'language': ''}):
+                with self.subTest(default=default, data=data):
+                    response = self.upload(**data)
+                    self.assertEqual(response.status_code, 200, response.text)
+                    self.assertEqual(self.seen_jobs[-1].request.language, default)
+                    self.assert_clean()
+
+    def test_invalid_language_format_is_rejected_before_processing(self):
+        for language in ('English', 'en-US', 'e', '12', ' en ', 'auto'):
+            with self.subTest(language=language):
+                self.assertEqual(self.upload(language=language).status_code, 422)
+                self.assert_clean()
+        self.assertEqual(self.seen_jobs, [])
+
     def test_zip_contains_both_embedded_songs(self):
         self.settings(copy_no_vocals=True, demucs_mp3=True)
         response = self.upload(filename='My melody.mp3', lyrics='A gentle melody')
