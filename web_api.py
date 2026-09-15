@@ -11,6 +11,7 @@ import sys
 import time
 import uuid
 from collections import deque
+from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
@@ -27,7 +28,10 @@ REPO_ROOT = Path(__file__).resolve().parent
 INPUT_DIR = (REPO_ROOT / 'input').resolve()
 OUTPUT_DIR = (REPO_ROOT / 'output').resolve()
 SONGS_DIR = (OUTPUT_DIR / 'songs').resolve()
+TEMP_DIR = (REPO_ROOT / 'temp').resolve()
 WEB_DIST = REPO_ROOT / 'webui' / 'dist'
+CLEANUP_MAX_AGE_DAYS = 30
+CLEANUP_INTERVAL_SECONDS = 24 * 60 * 60
 SUPPORTED_AUDIO = {'.mp3', '.wav', '.flac', '.m4a', '.aac', '.ogg', '.opus', '.wma'}
 BACKEND_FILES = {
     'faster-whisper': 'faster_whisper_backend.py',
@@ -320,7 +324,44 @@ async def run_job(job: Job):
             job.process = None
 
 
-app = FastAPI(title='ssTranscriber API', version='1.0.0')
+def cleanup_old_generated_files(now: float | None = None):
+    cutoff = (time.time() if now is None else now) - CLEANUP_MAX_AGE_DAYS * 24 * 60 * 60
+    deleted = 0
+    failures = []
+    for root in (OUTPUT_DIR, TEMP_DIR):
+        if not root.is_dir():
+            continue
+        for path in root.rglob('*'):
+            try:
+                if path.is_file() and path.stat().st_mtime < cutoff:
+                    path.unlink()
+                    deleted += 1
+            except OSError as exc:
+                failures.append(f'{path}: {exc}')
+    return deleted, failures
+
+
+async def scheduled_cleanup():
+    while True:
+        await asyncio.sleep(CLEANUP_INTERVAL_SECONDS)
+        deleted, failures = await asyncio.to_thread(cleanup_old_generated_files)
+        print(f'Generated-file cleanup: deleted {deleted}, failed {len(failures)}', flush=True)
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    deleted, failures = await asyncio.to_thread(cleanup_old_generated_files)
+    print(f'Generated-file cleanup: deleted {deleted}, failed {len(failures)}', flush=True)
+    cleanup_task = asyncio.create_task(scheduled_cleanup())
+    try:
+        yield
+    finally:
+        cleanup_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await cleanup_task
+
+
+app = FastAPI(title='ssTranscriber API', version='1.0.0', lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=['http://localhost:5173', 'http://127.0.0.1:5173'],

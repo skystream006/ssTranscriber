@@ -4,3 +4,4 @@ temp/
 .env
 __pycache__/
 backend/__pycache__/
+.venv/

@@ -115,6 +115,10 @@ npm --prefix .\webui run dev
 The API binds to localhost by default. Job state is held in memory and resets when the API server
 restarts; transcript files and archived output remain on disk.
 
+While the API server is running, it removes files under `output/` and `temp/` whose modification
+time is more than 30 days old. Cleanup runs once during server startup and then every 24 hours.
+Source files under `input/` are never included in this cleanup.
+
 Under **Advanced**, expand **Backend profile** to edit the selected backend's runtime options as
 JSON. Enabling **Viet Lyrics fallback pass** adds an independent **Fallback profile** for the
 isolated fallback worker. Nested objects are merged with the displayed defaults, unknown top-level
