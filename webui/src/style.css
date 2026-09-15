@@ -241,6 +241,19 @@ h2 { font-size: 18px; line-height: 1.2; font-weight: 650; letter-spacing: 0; }
 .endpoint-parameters small { color: var(--muted); font-weight: 400; }
 .endpoint-parameters dd { margin: 5px 0 0; }
 .endpoint-guide a { color: var(--green); font-size: 13px; }
+.endpoint-jobs-workspace { max-width: 1440px; margin: 0 auto; }
+.endpoint-jobs-layout { display: grid; grid-template-columns: minmax(300px, .8fr) minmax(0, 1.2fr); gap: 18px; align-items: start; }
+.endpoint-jobs-layout .activity-panel { position: static; min-width: 0; }
+.endpoint-job-filters { margin: 18px; }
+.endpoint-job-list .history-list { max-height: 65vh; overflow-y: auto; }
+.endpoint-job-list .history-list button { min-height: 76px; }
+.endpoint-job-detail .activity-head { flex-wrap: wrap; gap: 12px; }
+.endpoint-job-detail .activity-head h2 { overflow-wrap: anywhere; }
+.endpoint-job-metadata { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 10px 16px; font-size: 12px; margin: 18px 0; }
+.endpoint-job-metadata dt { color: var(--muted); }
+.endpoint-job-metadata dd { margin: 0; overflow-wrap: anywhere; }
+.endpoint-job-note { color: var(--muted); font-size: 12px; line-height: 1.6; }
+@media (max-width: 1100px) { .endpoint-jobs-layout { grid-template-columns: minmax(0, 1fr); } }
 .control-panel, .activity-panel, .result-list, .transcript-viewer, .music-library, .music-player-panel { background: var(--paper); border: 1px solid var(--line); box-shadow: 0 12px 35px var(--panel-shadow); }
 .panel-section { padding: 23px 25px; border-bottom: 1px solid var(--line); }
 .section-heading { display: grid; grid-template-columns: 32px 1fr auto; gap: 11px; align-items: center; margin-bottom: 18px; }

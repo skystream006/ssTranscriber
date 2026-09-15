@@ -120,6 +120,21 @@ Interactive request schemas and testing are available at `/docs`. This API, incl
 configuration changes, is intended for trusted local use and has no authentication;
 do not expose it publicly without authentication and upload/request limits.
 
+Open **Endpoint jobs** (`/endpoint-jobs`) to monitor requests received through
+`POST /api/transcribe`. The page refreshes automatically and shows running/queued uploads
+with original filenames, processing settings, timestamps, and live logs. **Recent history**
+also shows completed, failed, and cancelled requests. These jobs remain separate from
+Transcribe jobs. Completion means processing and download preparation succeeded; it does
+not confirm that the client finished downloading. Downloads still go to the original caller.
+
+- `GET /api/endpoint-jobs`: list upload jobs, newest first, without logs.
+- `GET /api/endpoint-jobs/{job_id}`: fetch one upload job including captured logs.
+- Successful upload responses include an `X-Job-ID` header for correlation.
+
+All active jobs and the latest 100 finished upload records are retained in memory.
+Job history resets on API restart, while uploaded audio and lyrics are still cleaned up
+after the response. Invalid uploads rejected before processing are not added to the list.
+
 ### Running the web interface
 
 The optional local interface uses FastAPI for queued CLI subprocess jobs and React/Vite for the

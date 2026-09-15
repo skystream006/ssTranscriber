@@ -38,6 +38,7 @@ import {
 } from 'lucide-react'
 import MusicPlayer from './MusicPlayer'
 import Health from './Health'
+import EndpointJobs from './EndpointJobs'
 
 type BackendConfig = {
   models: string[]
@@ -53,7 +54,7 @@ type AppConfig = {
 
 type JobStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'
 type Theme = 'light' | 'dark' | 'royal-blue' | 'royal-purple' | 'black' | 'yellow'
-type View = 'run' | 'music' | 'results' | 'health' | 'endpoints'
+type View = 'run' | 'music' | 'results' | 'health' | 'endpoints' | 'endpoint-jobs'
 type ViewTransitionDocument = Document & {
   startViewTransition?: (update: () => void) => { ready: Promise<void> }
 }
@@ -145,7 +146,7 @@ const themeOptions: { value: Theme; label: string; colors: [string, string] }[] 
   { value: 'yellow', label: 'Yellow', colors: ['#f3cf3f', '#3d3208'] },
 ]
 const darkThemes = new Set<Theme>(['dark', 'royal-blue', 'royal-purple', 'black'])
-const viewPaths: Record<View, string> = { run: '/', music: '/music', results: '/results', health: '/health', endpoints: '/endpoints' }
+const viewPaths: Record<View, string> = { run: '/', music: '/music', results: '/results', health: '/health', endpoints: '/endpoints', 'endpoint-jobs': '/endpoint-jobs' }
 const configurationsStorageKey = 'ss-transcriber-configurations-v1'
 const defaultConfigurationStorageKey = 'ss-transcriber-default-configuration-v1'
 
@@ -161,6 +162,7 @@ function readSavedConfigurations(): SavedConfiguration[] {
 }
 
 function viewFromPath(pathname: string): View {
+  if (pathname === '/endpoint-jobs' || pathname.startsWith('/endpoint-jobs/')) return 'endpoint-jobs'
   if (pathname === '/endpoints' || pathname.startsWith('/endpoints/')) return 'endpoints'
   if (pathname === '/health' || pathname.startsWith('/health/')) return 'health'
   if (pathname === '/music' || pathname.startsWith('/music/')) return 'music'
@@ -716,6 +718,9 @@ export default function App() {
           <button className={isEndpoint ? 'active' : ''} aria-label="Endpoints" title="Endpoints" onClick={() => navigate('endpoints')}>
             <Plug /> <span className="nav-label">Endpoints</span>
           </button>
+          <button className={view === 'endpoint-jobs' ? 'active' : ''} aria-label="Endpoint jobs" title="Endpoint jobs" onClick={() => navigate('endpoint-jobs')}>
+            <History /> <span className="nav-label">Endpoint jobs</span>
+          </button>
         </nav>
         <div className="sidebar-foot">
           <span className="health-dot" /> API connected
@@ -727,7 +732,7 @@ export default function App() {
         <header className="topbar">
           <div>
             <span className="eyebrow">Local audio workspace</span>
-            <h1>{isEndpoint ? 'Endpoint configuration' : view === 'run' ? 'Transcription desk' : view === 'music' ? 'Music player' : view === 'health' ? 'System health' : 'Transcript archive'}</h1>
+            <h1>{view === 'endpoint-jobs' ? 'Endpoint jobs' : isEndpoint ? 'Endpoint configuration' : view === 'run' ? 'Transcription desk' : view === 'music' ? 'Music player' : view === 'health' ? 'System health' : 'Transcript archive'}</h1>
           </div>
           <div className="topbar-actions">
             <details className="theme-picker" ref={themeMenuRef}>
@@ -754,10 +759,10 @@ export default function App() {
                 ))}
               </div>
             </details>
-            <div className="topbar-stat">
+            {view !== 'endpoint-jobs' && <div className="topbar-stat">
               <Activity />
               <span><strong>{jobs.filter((job) => job.status === 'running').length}</strong> running</span>
-            </div>
+            </div>}
           </div>
         </header>
 
@@ -1005,6 +1010,8 @@ export default function App() {
               </div>
             </aside>}
           </div>
+        ) : view === 'endpoint-jobs' ? (
+          <EndpointJobs />
         ) : view === 'music' ? (
           <MusicPlayer files={musicFiles} onRefresh={refreshMusicFiles} />
         ) : view === 'health' ? (

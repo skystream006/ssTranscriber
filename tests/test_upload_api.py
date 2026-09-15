@@ -42,6 +42,8 @@ class UploadAPITests(unittest.TestCase):
             patch.object(web_api, 'build_command', command),
             patch.object(web_api, 'run_job', run_job),
             patch.object(web_api, 'job_lock', asyncio.Lock()),
+            patch.object(web_api, 'endpoint_jobs', {}),
+            patch.object(web_api, 'jobs', {}),
             patch.object(web_api.tempfile, 'mkdtemp', lambda **kw: original_mkdtemp(dir=self.root, **kw)),
         ):
             patcher.start()
@@ -98,6 +100,17 @@ class UploadAPITests(unittest.TestCase):
         self.assertEqual(request.lyrics_mode, 'align')
         self.assertFalse(request.save_previous_results)
         self.assertIsNone(request.file)
+        listed = self.client.get('/api/endpoint-jobs').json()
+        self.assertEqual(len(listed), 1)
+        self.assertEqual(listed[0]['filename'], 'Có Tất Cả.mp3')
+        self.assertEqual(listed[0]['status'], 'completed')
+        self.assertNotIn('logs', listed[0])
+        self.assertNotIn('work_dir', listed[0])
+        self.assertEqual(response.headers['x-job-id'], listed[0]['id'])
+        detail = self.client.get(f"/api/endpoint-jobs/{listed[0]['id']}").json()
+        self.assertTrue(detail['logs'])
+        self.assertIsNotNone(detail['finished_at'])
+        self.assertEqual(self.client.get('/api/jobs').json(), [])
         self.assert_clean()
 
     def test_absent_and_blank_lyrics_disable_known_lyrics(self):
@@ -135,6 +148,9 @@ class UploadAPITests(unittest.TestCase):
         response = self.upload()
         self.assertEqual(response.status_code, 500)
         self.assertIn('no-vocals', response.json()['detail'])
+        detail = self.client.get(f'/api/endpoint-jobs/{self.seen_jobs[-1].id}').json()
+        self.assertEqual(detail['status'], 'failed')
+        self.assertIn('no-vocals', detail['logs'][-1])
         self.assert_clean()
 
     def test_pipeline_failures_never_return_unprocessed_audio(self):
@@ -199,6 +215,10 @@ class UploadAPITests(unittest.TestCase):
                     try:
                         await asyncio.wait_for(queued.wait(), timeout=10)
                         self.assertTrue(all(job.status == 'queued' and job.process is None for job in self.seen_jobs))
+                        listed = (await client.get('/api/endpoint-jobs')).json()
+                        self.assertEqual(len(listed), 2)
+                        self.assertTrue(all(job['status'] == 'queued' and job['filename'] == 'same.mp3' for job in listed))
+                        self.assertEqual((await client.get('/api/jobs')).json(), [])
                         settings = web_api.EndpointSettings(language='vi', vocal_separation=False)
                         saved = await client.put('/api/endpoint-config', json=settings.model_dump())
                         self.assertEqual(saved.status_code, 200)
@@ -210,7 +230,87 @@ class UploadAPITests(unittest.TestCase):
                     self.assertEqual(ID3(io.BytesIO(response.content)).getall('USLT')[0].text, lyric)
                 self.assertTrue(all(job.request.language == 'en' for job in self.seen_jobs))
                 self.assertNotEqual(self.seen_jobs[0].work_dir, self.seen_jobs[1].work_dir)
-                self.assertLessEqual(self.seen_jobs[0].finished_at, self.seen_jobs[1].started_at)
+                self.assertLessEqual(self.seen_jobs[0].started_at, self.seen_jobs[1].started_at)
+
+        asyncio.run(exercise())
+        self.assert_clean()
+
+    def test_running_upload_can_be_monitored_before_response_is_ready(self):
+        async def exercise():
+            started = asyncio.Event()
+            release = asyncio.Event()
+
+            async def hold_running(job):
+                job.status = 'running'
+                job.started_at = web_api.utc_now()
+                job.logs.append('transcription 35%')
+                started.set()
+                await release.wait()
+                job.status = 'failed'
+                job.return_code = 1
+
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=web_api.app), base_url='http://test') as client:
+                with patch.object(web_api, 'run_job', hold_running):
+                    request = asyncio.create_task(client.post('/api/transcribe', files={'file': ('live.mp3', b'audio')}))
+                    try:
+                        await asyncio.wait_for(started.wait(), timeout=10)
+                        self.assertFalse(request.done())
+                        listed = (await client.get('/api/endpoint-jobs')).json()
+                        self.assertEqual(listed[0]['status'], 'running')
+                        self.assertEqual(listed[0]['filename'], 'live.mp3')
+                        detail = (await client.get(f"/api/endpoint-jobs/{listed[0]['id']}")).json()
+                        self.assertEqual(detail['logs'], ['transcription 35%'])
+                        self.assertIsNone(detail['finished_at'])
+                    finally:
+                        release.set()
+                        response = await request
+                    self.assertEqual(response.status_code, 500)
+                    self.assertEqual((await client.get('/api/endpoint-jobs')).json()[0]['status'], 'failed')
+
+        asyncio.run(exercise())
+        self.assert_clean()
+
+    def test_endpoint_history_is_bounded_without_dropping_active_jobs(self):
+        with patch.object(web_api, 'ENDPOINT_JOB_HISTORY_LIMIT', 2):
+            active = web_api.Job(web_api.JobRequest())
+            web_api.endpoint_jobs[active.id] = active
+            for _ in range(3):
+                job = web_api.Job(web_api.JobRequest())
+                job.status = 'completed'
+                web_api.endpoint_jobs[job.id] = job
+            oldest_finished = list(web_api.endpoint_jobs)[1]
+            web_api.prune_endpoint_jobs()
+            self.assertIn(active.id, web_api.endpoint_jobs)
+            self.assertNotIn(oldest_finished, web_api.endpoint_jobs)
+            self.assertEqual(len(web_api.endpoint_jobs), 3)
+            self.assertEqual(self.client.get('/api/endpoint-jobs/missing').status_code, 404)
+            local = web_api.Job(web_api.JobRequest())
+            web_api.jobs[local.id] = local
+            self.assertEqual(self.client.get(f'/api/endpoint-jobs/{local.id}').status_code, 404)
+
+    def test_cancelled_queued_upload_is_marked_cancelled(self):
+        async def exercise():
+            queued = asyncio.Event()
+            original_run = web_api.run_job
+
+            async def observe_queue(job):
+                queued.set()
+                await original_run(job)
+
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=web_api.app), base_url='http://test') as client:
+                await web_api.job_lock.acquire()
+                try:
+                    with patch.object(web_api, 'run_job', observe_queue):
+                        request = asyncio.create_task(client.post('/api/transcribe', files={'file': ('cancel.mp3', b'audio')}))
+                        await asyncio.wait_for(queued.wait(), timeout=10)
+                        request.cancel()
+                        with self.assertRaises(asyncio.CancelledError):
+                            await request
+                    listed = (await client.get('/api/endpoint-jobs')).json()
+                    self.assertEqual(listed[0]['status'], 'cancelled')
+                    self.assertIsNotNone(listed[0]['finished_at'])
+                finally:
+                    web_api.job_lock.release()
 
         asyncio.run(exercise())
         self.assert_clean()

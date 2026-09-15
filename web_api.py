@@ -243,10 +243,12 @@ class Job:
         self.cancel_requested = False
         self.work_dir = work_dir
         self.upload_name = upload_name
+        self.filename = request.file
 
     def public(self, include_logs=False):
         result = {
             'id': self.id,
+            'filename': self.filename,
             'status': self.status,
             'created_at': self.created_at,
             'started_at': self.started_at,
@@ -261,7 +263,17 @@ class Job:
 
 
 jobs: dict[str, Job] = {}
+endpoint_jobs: dict[str, Job] = {}
+ENDPOINT_JOB_HISTORY_LIMIT = 100
 job_lock = asyncio.Lock()
+
+
+def prune_endpoint_jobs():
+    """Keep all active uploads and only the most recent finished upload records."""
+    finished = [job.id for job in endpoint_jobs.values()
+                if job.status in {'completed', 'failed', 'cancelled'}]
+    for job_id in finished[:-ENDPOINT_JOB_HISTORY_LIMIT]:
+        endpoint_jobs.pop(job_id, None)
 
 
 def build_command(request: JobRequest):
@@ -335,7 +347,8 @@ async def run_job(job: Job):
             if job.cancel_requested:
                 job.status = 'cancelled'
             else:
-                job.status = 'completed' if job.return_code == 0 else 'failed'
+                # Uploads remain active until the response artifacts are verified/packaged.
+                job.status = ('running' if job.work_dir is not None else 'completed') if job.return_code == 0 else 'failed'
         except asyncio.CancelledError:
             if job.process is not None and job.process.returncode is None:
                 if os.name == 'nt':
@@ -349,7 +362,8 @@ async def run_job(job: Job):
             job.logs.append(f'Web API error: {exc}')
             job.status = 'failed'
         finally:
-            job.finished_at = utc_now()
+            if job.status in {'completed', 'failed', 'cancelled'}:
+                job.finished_at = utc_now()
             job.process = None
 
 
@@ -556,6 +570,7 @@ async def transcribe_upload(
 ):
     """Wait for processing using saved endpoint defaults, then download the completed audio."""
     work_dir = None
+    job = None
     response_ready = False
     try:
         filename = Path((file.filename or '').replace('\\', '/')).name
@@ -570,19 +585,43 @@ async def transcribe_upload(
         work_dir = Path(tempfile.mkdtemp(prefix='ss-transcriber-api-'))
         song = await asyncio.to_thread(prepare_upload, work_dir, file.file, suffix, lyrics)
         job = Job(request, work_dir=work_dir, upload_name=song.name)
+        job.filename = filename
+        endpoint_jobs[job.id] = job
+        prune_endpoint_jobs()
         await run_job(job)
-        if job.status != 'completed':
+        if job.status != 'running' or job.return_code != 0:
             raise HTTPException(status_code=500, detail={
                 'message': 'Song processing failed', 'logs': list(job.logs)[-30:],
             })
+        job.logs.append('Preparing download response…')
         path, download_name, media_type = await asyncio.to_thread(
             upload_result, work_dir, song, filename, settings.copy_no_vocals,
         )
         response = FileResponse(path, filename=download_name, media_type=media_type,
+                                headers={'X-Job-ID': job.id},
                                 background=BackgroundTask(shutil.rmtree, work_dir, ignore_errors=True))
+        job.logs.append('Processing completed; download is ready for the requesting client.')
+        job.status = 'completed'
+        job.finished_at = utc_now()
         response_ready = True
         return response
+    except asyncio.CancelledError:
+        if job is not None:
+            job.status = 'cancelled'
+            job.finished_at = utc_now()
+            job.logs.append('Upload request cancelled.')
+        raise
+    except Exception as exc:
+        if job is not None:
+            if job.status != 'cancelled':
+                job.status = 'failed'
+            job.finished_at = utc_now()
+            detail = exc.detail if isinstance(exc, HTTPException) else str(exc)
+            if isinstance(detail, str):
+                job.logs.append(f'Upload error: {detail}')
+        raise
     finally:
+        prune_endpoint_jobs()
         await file.close()
         if work_dir is not None and not response_ready:
             await asyncio.to_thread(shutil.rmtree, work_dir, ignore_errors=True)
@@ -664,6 +703,19 @@ def get_music_lyrics(library: str, relative_path: str):
     return audio_lyrics(music_audio_path(library, relative_path))
 
 
+@app.get('/api/endpoint-jobs')
+def get_endpoint_jobs():
+    return [job.public() for job in reversed(list(endpoint_jobs.values()))]
+
+
+@app.get('/api/endpoint-jobs/{job_id}')
+def get_endpoint_job(job_id: str):
+    job = endpoint_jobs.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail='Endpoint job not found')
+    return job.public(include_logs=True)
+
+
 @app.get('/api/jobs')
 def get_jobs():
     return [job.public() for job in reversed(list(jobs.values()))]
@@ -734,6 +786,7 @@ def get_transcript(relative_path: str):
 
 
 if WEB_DIST.is_dir():
+    @app.get('/endpoint-jobs', include_in_schema=False)
     @app.get('/endpoints', include_in_schema=False)
     @app.get('/health', include_in_schema=False)
     @app.get('/music', include_in_schema=False)
