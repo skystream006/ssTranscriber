@@ -2,6 +2,8 @@ input/
 output/
 temp/
 .env
+.endpoint-config.json
+.endpoint-config.*.tmp
 __pycache__/
 backend/__pycache__/
 .venv/

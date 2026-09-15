@@ -80,6 +80,48 @@ mismatched PyTorch build — rerun with a different `--cuda` value.
 
 ## Local Web UI
 
+### Upload transcription API
+
+Open **Endpoints** (`/endpoints`) to configure server-side defaults for upload requests.
+It includes the same **Recognition** and **Advanced** settings as Transcribe, including
+Demucs, the no-vocals copy, backend profiles, and the Viet Lyrics fallback. Settings are
+saved in the git-ignored `.endpoint-config.json` and survive server restarts. They are
+independent of browser-saved Transcribe configurations. Archiving and Lyrics assist
+controls do not apply to uploads.
+
+- `GET /api/endpoint-config`: read the current defaults.
+- `PUT /api/endpoint-config`: save processing defaults as JSON. Unsupported fields,
+  unknown profile groups, and invalid no-vocals combinations are rejected.
+- `POST /api/transcribe`: upload `multipart/form-data` and wait for the finished download:
+
+  | Field | Required | Meaning |
+  | --- | --- | --- |
+  | `file` | Yes | Song file in one of the supported audio formats. |
+  | `lyrics` | No | Plain-text lyrics. Nonblank data automatically enables known lyrics; absent or blank data disables them. |
+  | `lyrics_mode` | No | `align` (default), `prompt`, or `correct`. Ignored when no lyrics are supplied. |
+
+The response is the uploaded song with completed USLT/SYLT lyrics embedding and an
+attachment filename (`application/octet-stream`). If **Copy no-vocals song** is enabled,
+the response is `application/zip`, containing the embedded song and
+`[NoVocals] <song stem>.mp3`, also with embedded lyrics. This option requires both vocal
+separation and MP3 stems. Missing requested accompaniment or a transcription/embedding
+failure returns an error, not an unprocessed song or partial download.
+
+Requests take a snapshot of saved defaults and share the one-at-a-time processing lock
+with Transcribe jobs. Allow a long HTTP timeout for queueing, model downloads, and
+inference. Uploaded files, supplied lyrics, transcripts, and Demucs stems use private
+temporary directories; existing input songs and previous results are never modified.
+Temporary artifacts are removed after the response or processing failure. No separate
+transcript file is included in the download; the transcript is embedded in the audio.
+The embedding format is the existing pipeline's ID3 USLT/SYLT format, so player support
+for these tags in non-MP3 containers can vary.
+
+Interactive request schemas and testing are available at `/docs`. This API, including
+configuration changes, is intended for trusted local use and has no authentication;
+do not expose it publicly without authentication and upload/request limits.
+
+### Running the web interface
+
 The optional local interface uses FastAPI for queued CLI subprocess jobs and React/Vite for the
 browser client. Jobs run one at a time to avoid competing for GPU memory. The API process does not
 import Torch or the ASR runtimes; each job still executes `process_audio_folder.py` in an isolated

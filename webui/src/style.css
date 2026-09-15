@@ -229,6 +229,18 @@ h2 { font-size: 18px; line-height: 1.2; font-weight: 650; letter-spacing: 0; }
 
 .run-layout { max-width: 1440px; margin: 0 auto; display: grid; grid-template-columns: minmax(480px, 1.08fr) minmax(390px, .92fr); gap: 18px; align-items: start; }
 .run-layout.configuration-collapsed { grid-template-columns: minmax(0, 1fr); }
+.processing-fields { border: 0; padding: 0; margin: 0; min-width: 0; }
+.endpoint-intro { background: var(--surface); }
+.endpoint-intro .step { display: grid; place-items: center; min-height: 30px; }
+.endpoint-intro .step svg { width: 16px; }
+.endpoint-intro > p, .endpoint-guide p, .endpoint-parameters dd { color: var(--muted); font-size: 13px; line-height: 1.7; }
+.endpoint-guide p { margin: 16px 0; }
+.endpoint-address { display: block; padding: 14px; background: var(--green-soft); color: var(--green); font: 600 13px var(--mono); border: 1px solid var(--line); border-radius: 5px; overflow-wrap: anywhere; }
+.endpoint-parameters { margin: 22px 0; }
+.endpoint-parameters dt { font: 600 12px var(--mono); margin-top: 16px; }
+.endpoint-parameters small { color: var(--muted); font-weight: 400; }
+.endpoint-parameters dd { margin: 5px 0 0; }
+.endpoint-guide a { color: var(--green); font-size: 13px; }
 .control-panel, .activity-panel, .result-list, .transcript-viewer, .music-library, .music-player-panel { background: var(--paper); border: 1px solid var(--line); box-shadow: 0 12px 35px var(--panel-shadow); }
 .panel-section { padding: 23px 25px; border-bottom: 1px solid var(--line); }
 .section-heading { display: grid; grid-template-columns: 32px 1fr auto; gap: 11px; align-items: center; margin-bottom: 18px; }

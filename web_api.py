@@ -5,11 +5,14 @@ import csv
 import json
 import math
 import os
+import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 import uuid
+import zipfile
 from collections import deque
 from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timezone
@@ -17,12 +20,13 @@ from pathlib import Path
 from typing import Any, Literal
 
 import psutil
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from mutagen.id3 import ID3, ID3NoHeaderError
 from pydantic import BaseModel, Field, field_validator, model_validator
+from starlette.background import BackgroundTask
 
 REPO_ROOT = Path(__file__).resolve().parent
 INPUT_DIR = (REPO_ROOT / 'input').resolve()
@@ -30,6 +34,7 @@ OUTPUT_DIR = (REPO_ROOT / 'output').resolve()
 SONGS_DIR = (OUTPUT_DIR / 'songs').resolve()
 TEMP_DIR = (REPO_ROOT / 'temp').resolve()
 WEB_DIST = REPO_ROOT / 'webui' / 'dist'
+ENDPOINT_CONFIG_PATH = REPO_ROOT / '.endpoint-config.json'
 CLEANUP_MAX_AGE_DAYS = 30
 CLEANUP_INTERVAL_SECONDS = 24 * 60 * 60
 SUPPORTED_AUDIO = {'.mp3', '.wav', '.flac', '.m4a', '.aac', '.ogg', '.opus', '.wma'}
@@ -171,8 +176,7 @@ def music_audio_path(library: str, relative_path: str):
     return path
 
 
-class JobRequest(BaseModel):
-    file: str | None = None
+class ProcessingSettings(BaseModel):
     backend: str = 'faster-whisper'
     model: str = 'large-v3'
     device: str = 'auto'
@@ -182,9 +186,6 @@ class JobRequest(BaseModel):
     demucs_mp3_bitrate: int = Field(default=320, ge=64, le=512)
     copy_no_vocals: bool = False
     keep_promotions: bool = False
-    use_lyrics: bool = True
-    lyrics_mode: Literal['prompt', 'align', 'correct'] = 'prompt'
-    save_previous_results: bool = False
     opening_threshold: float = Field(default=1.0, ge=0, le=300)
     fallback_viet_lyrics: bool = False
     fallback_viet_lyrics_model: str = DEFAULT_MODELS['viet-lyrics']
@@ -198,6 +199,25 @@ class JobRequest(BaseModel):
             raise ValueError('Unsupported backend')
         return value
 
+    @model_validator(mode='after')
+    def validate_no_vocals_copy(self):
+        if self.copy_no_vocals and (not self.vocal_separation or not self.demucs_mp3):
+            raise ValueError('copy_no_vocals requires vocal_separation and demucs_mp3')
+        return self
+
+
+class EndpointSettings(ProcessingSettings):
+    model_config = {'extra': 'forbid'}
+    language: str | None = 'vi'
+    opening_threshold: float = Field(default=20.0, ge=0, le=300)
+
+
+class JobRequest(ProcessingSettings):
+    file: str | None = None
+    use_lyrics: bool = True
+    lyrics_mode: Literal['prompt', 'align', 'correct'] = 'prompt'
+    save_previous_results: bool = False
+
     @field_validator('file')
     @classmethod
     def validate_file(cls, value):
@@ -208,15 +228,9 @@ class JobRequest(BaseModel):
             raise ValueError('File must be a supported audio file under input/')
         return candidate.relative_to(INPUT_DIR).as_posix()
 
-    @model_validator(mode='after')
-    def validate_no_vocals_copy(self):
-        if self.copy_no_vocals and (not self.vocal_separation or not self.demucs_mp3):
-            raise ValueError('copy_no_vocals requires vocal_separation and demucs_mp3')
-        return self
-
 
 class Job:
-    def __init__(self, request: JobRequest):
+    def __init__(self, request: JobRequest, work_dir: Path | None = None, upload_name: str | None = None):
         self.id = uuid.uuid4().hex[:12]
         self.request = request
         self.status = 'queued'
@@ -227,6 +241,8 @@ class Job:
         self.logs = deque(maxlen=4000)
         self.process = None
         self.cancel_requested = False
+        self.work_dir = work_dir
+        self.upload_name = upload_name
 
     def public(self, include_logs=False):
         result = {
@@ -302,8 +318,12 @@ async def run_job(job: Job):
         creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == 'nt' else 0
         kwargs = {'creationflags': creationflags} if os.name == 'nt' else {'start_new_session': True}
         try:
+            command = build_command(job.request)
+            if job.work_dir is not None:
+                command.extend(['--file', job.upload_name])
+                kwargs['env'] = {**os.environ, 'SSTRANSCRIBER_WORK_DIR': str(job.work_dir)}
             job.process = await asyncio.create_subprocess_exec(
-                *build_command(job.request),
+                *command,
                 cwd=REPO_ROOT,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
@@ -316,6 +336,15 @@ async def run_job(job: Job):
                 job.status = 'cancelled'
             else:
                 job.status = 'completed' if job.return_code == 0 else 'failed'
+        except asyncio.CancelledError:
+            if job.process is not None and job.process.returncode is None:
+                if os.name == 'nt':
+                    await asyncio.to_thread(subprocess.run, ['taskkill', '/PID', str(job.process.pid), '/T', '/F'], capture_output=True, check=False)
+                else:
+                    os.killpg(job.process.pid, signal.SIGKILL)
+                await job.process.wait()
+            job.status = 'cancelled'
+            raise
         except Exception as exc:
             job.logs.append(f'Web API error: {exc}')
             job.status = 'failed'
@@ -448,6 +477,115 @@ def get_config():
         'devices': available_devices(),
         'lyrics_modes': ['prompt', 'align', 'correct'],
     }
+
+
+def validate_processing_profiles(settings: ProcessingSettings):
+    validate_profile_options(settings.backend, settings.backend_options, 'backend')
+    validate_profile_options('viet-lyrics', settings.fallback_viet_lyrics_options, 'fallback')
+
+
+@app.get('/api/endpoint-config', response_model=EndpointSettings)
+def get_endpoint_config():
+    if not ENDPOINT_CONFIG_PATH.exists():
+        return EndpointSettings()
+    try:
+        settings = EndpointSettings.model_validate_json(ENDPOINT_CONFIG_PATH.read_text(encoding='utf-8'))
+        validate_processing_profiles(settings)
+        return settings
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=500, detail='Could not load endpoint configuration') from exc
+
+
+@app.put('/api/endpoint-config', response_model=EndpointSettings)
+def save_endpoint_config(settings: EndpointSettings):
+    validate_processing_profiles(settings)
+    temporary = ENDPOINT_CONFIG_PATH.with_suffix(f'.{uuid.uuid4().hex}.tmp')
+    try:
+        temporary.write_text(settings.model_dump_json(indent=2) + '\n', encoding='utf-8')
+        temporary.replace(ENDPOINT_CONFIG_PATH)
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail='Could not save endpoint configuration') from exc
+    finally:
+        temporary.unlink(missing_ok=True)
+    return settings
+
+
+def prepare_upload(work_dir: Path, file, suffix: str, lyrics: str | None):
+    input_dir = work_dir / 'input'
+    input_dir.mkdir()
+    # Fixed internal names avoid traversal, Windows reserved names, and Demucs exclusions.
+    song = input_dir / f'song{suffix}'
+    with song.open('wb') as target:
+        shutil.copyfileobj(file, target, length=1024 * 1024)
+    if song.stat().st_size == 0:
+        raise HTTPException(status_code=422, detail='Song file is empty')
+    if lyrics:
+        lyrics_dir = input_dir / 'lyrics'
+        lyrics_dir.mkdir()
+        (lyrics_dir / 'song.txt').write_text(lyrics, encoding='utf-8')
+    return song
+
+
+def upload_result(work_dir: Path, song: Path, filename: str, copy_no_vocals: bool):
+    manifest = work_dir / 'output' / 'processing_results.json'
+    if not manifest.is_file():
+        raise HTTPException(status_code=500, detail='Processing did not produce a completion record')
+    results = json.loads(manifest.read_text(encoding='utf-8'))
+    if len(results) != 1 or not results[0]['status'].startswith('Success'):
+        raise HTTPException(status_code=500, detail='Song transcription or embedding failed')
+    if not copy_no_vocals:
+        return song, filename, 'application/octet-stream'
+    accompaniment = work_dir / 'output' / 'songs' / '[NoVocals] song.mp3'
+    if not accompaniment.is_file():
+        raise HTTPException(status_code=500, detail='The requested no-vocals song could not be produced')
+    archive = work_dir / 'result.zip'
+    with zipfile.ZipFile(archive, 'w', compression=zipfile.ZIP_STORED) as bundle:
+        bundle.write(song, filename)
+        bundle.write(accompaniment, f'[NoVocals] {Path(filename).stem}.mp3')
+    return archive, f'{Path(filename).stem}.zip', 'application/zip'
+
+
+@app.post('/api/transcribe', response_class=FileResponse, responses={
+    200: {'description': 'Embedded song, or a ZIP containing the song and no-vocals song.',
+          'content': {'application/octet-stream': {}, 'application/zip': {}}},
+})
+async def transcribe_upload(
+    file: UploadFile = File(..., description='Song file to transcribe and embed.'),
+    lyrics: str | None = Form(None, description='Optional plain-text lyrics; enables known lyrics automatically.'),
+    lyrics_mode: Literal['prompt', 'align', 'correct'] = Form('align'),
+):
+    """Wait for processing using saved endpoint defaults, then download the completed audio."""
+    work_dir = None
+    response_ready = False
+    try:
+        filename = Path((file.filename or '').replace('\\', '/')).name
+        suffix = Path(filename).suffix.lower()
+        if suffix not in SUPPORTED_AUDIO or any(ord(char) < 32 or char in '<>:"|?*' for char in filename):
+            raise HTTPException(status_code=422, detail='File must have a supported audio filename')
+        settings = await asyncio.to_thread(get_endpoint_config)
+        validate_processing_profiles(settings)
+        lyrics = lyrics.strip().lstrip('\ufeff').strip() if lyrics else None
+        request = JobRequest(**settings.model_dump(), use_lyrics=bool(lyrics), lyrics_mode=lyrics_mode,
+                             save_previous_results=False)
+        work_dir = Path(tempfile.mkdtemp(prefix='ss-transcriber-api-'))
+        song = await asyncio.to_thread(prepare_upload, work_dir, file.file, suffix, lyrics)
+        job = Job(request, work_dir=work_dir, upload_name=song.name)
+        await run_job(job)
+        if job.status != 'completed':
+            raise HTTPException(status_code=500, detail={
+                'message': 'Song processing failed', 'logs': list(job.logs)[-30:],
+            })
+        path, download_name, media_type = await asyncio.to_thread(
+            upload_result, work_dir, song, filename, settings.copy_no_vocals,
+        )
+        response = FileResponse(path, filename=download_name, media_type=media_type,
+                                background=BackgroundTask(shutil.rmtree, work_dir, ignore_errors=True))
+        response_ready = True
+        return response
+    finally:
+        await file.close()
+        if work_dir is not None and not response_ready:
+            await asyncio.to_thread(shutil.rmtree, work_dir, ignore_errors=True)
 
 
 @app.get('/api/files')
@@ -596,6 +734,7 @@ def get_transcript(relative_path: str):
 
 
 if WEB_DIST.is_dir():
+    @app.get('/endpoints', include_in_schema=False)
     @app.get('/health', include_in_schema=False)
     @app.get('/music', include_in_schema=False)
     @app.get('/results', include_in_schema=False)

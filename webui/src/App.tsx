@@ -26,6 +26,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Play,
+  Plug,
   Plus,
   RefreshCw,
   Save,
@@ -52,7 +53,7 @@ type AppConfig = {
 
 type JobStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'
 type Theme = 'light' | 'dark' | 'royal-blue' | 'royal-purple' | 'black' | 'yellow'
-type View = 'run' | 'music' | 'results' | 'health'
+type View = 'run' | 'music' | 'results' | 'health' | 'endpoints'
 type ViewTransitionDocument = Document & {
   startViewTransition?: (update: () => void) => { ready: Promise<void> }
 }
@@ -89,6 +90,8 @@ type Job = {
   log_count: number
   logs?: string[]
 }
+
+type EndpointSettings = Omit<JobRequest, 'file' | 'use_lyrics' | 'lyrics_mode' | 'save_previous_results'>
 
 type Transcript = {
   path: string
@@ -142,7 +145,7 @@ const themeOptions: { value: Theme; label: string; colors: [string, string] }[] 
   { value: 'yellow', label: 'Yellow', colors: ['#f3cf3f', '#3d3208'] },
 ]
 const darkThemes = new Set<Theme>(['dark', 'royal-blue', 'royal-purple', 'black'])
-const viewPaths: Record<View, string> = { run: '/', music: '/music', results: '/results', health: '/health' }
+const viewPaths: Record<View, string> = { run: '/', music: '/music', results: '/results', health: '/health', endpoints: '/endpoints' }
 const configurationsStorageKey = 'ss-transcriber-configurations-v1'
 const defaultConfigurationStorageKey = 'ss-transcriber-default-configuration-v1'
 
@@ -158,6 +161,7 @@ function readSavedConfigurations(): SavedConfiguration[] {
 }
 
 function viewFromPath(pathname: string): View {
+  if (pathname === '/endpoints' || pathname.startsWith('/endpoints/')) return 'endpoints'
   if (pathname === '/health' || pathname.startsWith('/health/')) return 'health'
   if (pathname === '/music' || pathname.startsWith('/music/')) return 'music'
   if (pathname === '/results' || pathname.startsWith('/results/')) return 'results'
@@ -168,7 +172,8 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, init)
   if (!response.ok) {
     const body = await response.json().catch(() => null)
-    throw new Error(body?.detail || `Request failed (${response.status})`)
+    const detail = body?.detail
+    throw new Error(typeof detail === 'string' ? detail : detail ? JSON.stringify(detail) : `Request failed (${response.status})`)
   }
   return response.json()
 }
@@ -301,7 +306,7 @@ export default function App() {
   const startupConfiguration = useRef(savedConfigurations.find((item) => item.id === defaultConfigurationId)).current
   const [selectedConfigurationId, setSelectedConfigurationId] = useState(startupConfiguration?.id ?? '')
   const [configurationName, setConfigurationName] = useState(startupConfiguration?.name ?? '')
-  const [form, setForm] = useState<JobRequest>(() => ({
+  const [runForm, setRunForm] = useState<JobRequest>(() => ({
     ...defaultForm,
     ...(startupConfiguration?.form ?? {}),
     file: null,
@@ -315,8 +320,21 @@ export default function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem('ss-transcriber-sidebar-collapsed') === 'true')
   const [configurationCollapsed, setConfigurationCollapsed] = useState(false)
   const [consoleExpanded, setConsoleExpanded] = useState(false)
-  const [backendProfileText, setBackendProfileText] = useState(startupConfiguration?.backendProfileText ?? '{}')
-  const [fallbackProfileText, setFallbackProfileText] = useState(startupConfiguration?.fallbackProfileText ?? '{}')
+  const [runBackendProfileText, setRunBackendProfileText] = useState(startupConfiguration?.backendProfileText ?? '{}')
+  const [runFallbackProfileText, setRunFallbackProfileText] = useState(startupConfiguration?.fallbackProfileText ?? '{}')
+  const [endpointForm, setEndpointForm] = useState<JobRequest>({ ...defaultForm, lyrics_mode: 'align' })
+  const [endpointBackendProfileText, setEndpointBackendProfileText] = useState('{}')
+  const [endpointFallbackProfileText, setEndpointFallbackProfileText] = useState('{}')
+  const [endpointReady, setEndpointReady] = useState(false)
+  const [endpointSaved, setEndpointSaved] = useState(false)
+  const isEndpoint = view === 'endpoints'
+  // Both pages use the same controls, but never share their editable settings.
+  const form = isEndpoint ? endpointForm : runForm
+  const setForm = isEndpoint ? setEndpointForm : setRunForm
+  const backendProfileText = isEndpoint ? endpointBackendProfileText : runBackendProfileText
+  const setBackendProfileText = isEndpoint ? setEndpointBackendProfileText : setRunBackendProfileText
+  const fallbackProfileText = isEndpoint ? endpointFallbackProfileText : runFallbackProfileText
+  const setFallbackProfileText = isEndpoint ? setEndpointFallbackProfileText : setRunFallbackProfileText
   const logRef = useRef<HTMLPreElement>(null)
   const themeMenuRef = useRef<HTMLDetailsElement>(null)
 
@@ -364,8 +382,8 @@ export default function App() {
       .then(([configResult, fileResult, musicFileResult, jobResult, transcriptResult]) => {
         setConfig(configResult)
         if (!startupConfiguration) {
-          setBackendProfileText(profileText(configResult.backends[defaultForm.backend]?.options))
-          setFallbackProfileText(profileText(configResult.backends['viet-lyrics']?.options))
+          setRunBackendProfileText(profileText(configResult.backends[defaultForm.backend]?.options))
+          setRunFallbackProfileText(profileText(configResult.backends['viet-lyrics']?.options))
         }
         setFiles(fileResult.files)
         setMusicFiles(musicFileResult.files)
@@ -375,6 +393,26 @@ export default function App() {
       })
       .catch((reason) => setError(reason.message))
   }, [])
+
+  useEffect(() => {
+    if (!isEndpoint || !config) return
+    let cancelled = false
+    setEndpointReady(false)
+    api<EndpointSettings>('/api/endpoint-config')
+      .then((settings) => {
+        if (cancelled) return
+        setEndpointForm({ ...defaultForm, ...settings, use_lyrics: false, lyrics_mode: 'align', save_previous_results: false })
+        setEndpointBackendProfileText(profileText(Object.keys(settings.backend_options).length ? settings.backend_options : config.backends[settings.backend]?.options))
+        setEndpointFallbackProfileText(profileText(Object.keys(settings.fallback_viet_lyrics_options).length ? settings.fallback_viet_lyrics_options : config.backends['viet-lyrics']?.options))
+        setEndpointReady(true)
+      })
+      .catch((reason) => { if (!cancelled) setError(reason.message) })
+    return () => { cancelled = true }
+  }, [isEndpoint, config])
+
+  useEffect(() => {
+    setEndpointSaved(false)
+  }, [endpointForm, endpointBackendProfileText, endpointFallbackProfileText])
 
   useEffect(() => {
     const timer = window.setInterval(async () => {
@@ -503,6 +541,30 @@ export default function App() {
       localStorage.removeItem(defaultConfigurationStorageKey)
     }
     newConfiguration()
+  }
+
+  const saveEndpointSettings = async (event: FormEvent) => {
+    event.preventDefault()
+    setBusy(true)
+    setError(null)
+    setEndpointSaved(false)
+    try {
+      const { file: _file, use_lyrics: _useLyrics, lyrics_mode: _lyricsMode, save_previous_results: _archive, ...settings } = endpointForm
+      await api<EndpointSettings>('/api/endpoint-config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...settings,
+          backend_options: parseProfile('Backend profile', endpointBackendProfileText),
+          fallback_viet_lyrics_options: parseProfile('Fallback profile', endpointFallbackProfileText),
+        }),
+      })
+      setEndpointSaved(true)
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason))
+    } finally {
+      setBusy(false)
+    }
   }
 
   const submit = async (event: FormEvent) => {
@@ -651,6 +713,9 @@ export default function App() {
           <button className={view === 'health' ? 'active' : ''} aria-label="Health" title="Health" onClick={() => navigate('health')}>
             <Activity /> <span className="nav-label">Health</span>
           </button>
+          <button className={isEndpoint ? 'active' : ''} aria-label="Endpoints" title="Endpoints" onClick={() => navigate('endpoints')}>
+            <Plug /> <span className="nav-label">Endpoints</span>
+          </button>
         </nav>
         <div className="sidebar-foot">
           <span className="health-dot" /> API connected
@@ -662,7 +727,7 @@ export default function App() {
         <header className="topbar">
           <div>
             <span className="eyebrow">Local audio workspace</span>
-            <h1>{view === 'run' ? 'Transcription desk' : view === 'music' ? 'Music player' : view === 'health' ? 'System health' : 'Transcript archive'}</h1>
+            <h1>{isEndpoint ? 'Endpoint configuration' : view === 'run' ? 'Transcription desk' : view === 'music' ? 'Music player' : view === 'health' ? 'System health' : 'Transcript archive'}</h1>
           </div>
           <div className="topbar-actions">
             <details className="theme-picker" ref={themeMenuRef}>
@@ -703,10 +768,15 @@ export default function App() {
           </div>
         )}
 
-        {view === 'run' ? (
-          <div className={`run-layout ${configurationCollapsed ? 'configuration-collapsed' : ''}`}>
-            {!configurationCollapsed && <form className="control-panel" onSubmit={submit}>
-              <section className="configuration-panel panel-section">
+        {view === 'run' || isEndpoint ? (
+          <div className={`run-layout ${isEndpoint ? 'endpoint-layout' : configurationCollapsed ? 'configuration-collapsed' : ''}`}>
+            {(isEndpoint || !configurationCollapsed) && <form className="control-panel" onSubmit={isEndpoint ? saveEndpointSettings : submit}>
+              {isEndpoint && <section className="panel-section endpoint-intro">
+                <div className="section-heading"><span className="step"><Plug /></span><div><h2>API processing defaults</h2><p>Saved on the server · independent of Transcribe</p></div></div>
+                <p>These settings apply to new upload requests. Known lyrics are enabled automatically when lyrics data is supplied; omitted lyrics mode defaults to <strong>Align</strong>.</p>
+                {!endpointReady && <p role="status">Loading endpoint settings…</p>}
+              </section>}
+              {!isEndpoint && <><section className="configuration-panel panel-section">
                 <div className="section-heading">
                   <span className="step"><Save /></span>
                   <div><h2>Configurations</h2><p>Save and reuse transcription settings</p></div>
@@ -753,9 +823,11 @@ export default function App() {
                 </label>
               </section>
 
+              </>}
+              <fieldset className="processing-fields" disabled={isEndpoint && (!endpointReady || busy)}>
               <section className="panel-section">
                 <div className="section-heading">
-                  <span className="step">02</span>
+                  <span className="step">{isEndpoint ? '01' : '02'}</span>
                   <div><h2>Recognition</h2><p>Model and compute profile</p></div>
                 </div>
                 <div className="field-grid">
@@ -788,7 +860,7 @@ export default function App() {
                 </div>
               </section>
 
-              <section className="panel-section">
+              {!isEndpoint && <section className="panel-section">
                 <div className="section-heading">
                   <span className="step">03</span>
                   <div><h2>Lyrics assist</h2><p>Same-stem text under input/lyrics</p></div>
@@ -800,7 +872,7 @@ export default function App() {
                     <button key={mode} type="button" disabled={!form.use_lyrics} className={form.lyrics_mode === mode ? 'active' : ''} onClick={() => update('lyrics_mode', mode)}>{mode}</button>
                   ))}
                 </div>
-              </section>
+              </section>}
 
               <details className="advanced panel-section" open>
                 <summary><WandSparkles /> Advanced <ChevronDown /></summary>
@@ -811,14 +883,14 @@ export default function App() {
                       <Toggle checked={form.demucs_mp3} onChange={(value) => setForm((current) => ({ ...current, demucs_mp3: value, copy_no_vocals: value ? current.copy_no_vocals : false }))} label="Store Demucs stem as MP3" info="Save separated vocals as a smaller lossy MP3 instead of the default WAV file." />
                       {form.demucs_mp3 && (
                         <div className="demucs-mp3-expanded">
-                          <Toggle checked={form.copy_no_vocals} onChange={(value) => update('copy_no_vocals', value)} label="Copy no-vocals song" info="Copy the Demucs accompaniment to output/songs with embedded USLT and synchronized SYLT lyrics." />
+                          <Toggle checked={form.copy_no_vocals} onChange={(value) => update('copy_no_vocals', value)} label="Copy no-vocals song" info={isEndpoint ? 'Return a ZIP containing the processed song and Demucs accompaniment, both with embedded lyrics.' : 'Copy the Demucs accompaniment to output/songs with embedded USLT and synchronized SYLT lyrics.'} />
                           <label className="field"><FieldLabel info="Set the MP3 bitrate for saved Demucs stems. Higher values preserve more audio detail but create larger files.">Demucs bitrate</FieldLabel><div className="unit-input"><input type="number" min="64" max="512" value={form.demucs_mp3_bitrate} onChange={(event) => update('demucs_mp3_bitrate', Number(event.target.value))} /><span>kbps</span></div></label>
                         </div>
                       )}
                     </div>
                   )}
                   <Toggle checked={form.keep_promotions} onChange={(value) => update('keep_promotions', value)} label="Keep promotional phrases" info="Retain phrases such as subscribe, like, and thanks for watching instead of filtering them from transcripts." />
-                  <Toggle checked={form.save_previous_results} onChange={(value) => update('save_previous_results', value)} label="Archive previous results" info="Rename existing transcript and Demucs folders to numbered archives before creating results for this run." />
+                  {!isEndpoint && <Toggle checked={form.save_previous_results} onChange={(value) => update('save_previous_results', value)} label="Archive previous results" info="Rename existing transcript and Demucs folders to numbered archives before creating results for this run." />}
                   <Toggle
                     checked={form.fallback_viet_lyrics}
                     disabled={form.backend === 'viet-lyrics'}
@@ -864,18 +936,34 @@ export default function App() {
                   </details>
                 </div>
               </details>
+              </fieldset>
 
               <div className="action-bar">
-                <div><strong>{form.file ? '1 file' : `${files.length} files`}</strong><span>{form.backend} · {form.device}</span></div>
+                <div><strong role={isEndpoint ? 'status' : undefined}>{isEndpoint ? endpointSaved ? 'Defaults saved' : 'Endpoint defaults' : form.file ? '1 file' : `${files.length} files`}</strong><span>{form.backend} · {form.device}</span></div>
                 <div className="action-buttons">
-                  <button className="primary-button" type="submit" disabled={busy || !config}>
-                    {busy ? <LoaderCircle className="spin" /> : <Play />} Queue transcription
+                  <button className="primary-button" type="submit" disabled={busy || !config || (isEndpoint && !endpointReady)}>
+                    {busy ? <LoaderCircle className="spin" /> : isEndpoint ? <Save /> : <Play />} {isEndpoint ? 'Save endpoint defaults' : 'Queue transcription'}
                   </button>
                 </div>
               </div>
             </form>}
 
-            <aside className="activity-panel">
+            {isEndpoint ? <aside className="activity-panel endpoint-guide">
+              <div className="activity-head"><div><span className="eyebrow">Upload API</span><h2>Transcribe &amp; download</h2></div></div>
+              <section className="panel-section">
+                <code className="endpoint-address">POST /api/transcribe</code>
+                <p>Send a <code>multipart/form-data</code> request. The connection stays open until processing completes.</p>
+                <dl className="endpoint-parameters">
+                  <dt>file <small>required</small></dt><dd>A supported song file.</dd>
+                  <dt>lyrics <small>optional</small></dt><dd>Plain-text lyrics. Omit or leave blank to transcribe without known lyrics.</dd>
+                  <dt>lyrics_mode <small>optional</small></dt><dd><code>align</code> (default), <code>prompt</code>, or <code>correct</code>.</dd>
+                </dl>
+                <h3>Download response</h3>
+                <p>{form.copy_no_vocals ? 'ZIP archive containing the embedded song and a [NoVocals] MP3 with embedded lyrics.' : 'The original uploaded song with the completed transcription embedded as USLT and synchronized SYLT lyrics.'}</p>
+                <p>Uploads are isolated from your library and previous results. Temporary files are removed after download. Requests share the transcription queue; allow a long client timeout.</p>
+                <a href="/docs" target="_blank" rel="noreferrer">Open interactive API documentation ↗</a>
+              </section>
+            </aside> : <aside className="activity-panel">
               <div className="activity-head">
                 <div><span className="eyebrow">Live activity</span><h2>{selectedJob ? selectedJob.request.file ?? 'Batch run' : 'No job selected'}</h2></div>
                 <div className="activity-head-actions">
@@ -915,7 +1003,7 @@ export default function App() {
                   </button>
                 ))}
               </div>
-            </aside>
+            </aside>}
           </div>
         ) : view === 'music' ? (
           <MusicPlayer files={musicFiles} onRefresh={refreshMusicFiles} />

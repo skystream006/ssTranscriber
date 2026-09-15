@@ -111,7 +111,7 @@ def _copy_no_vocals_song(source_audio: Path, vocals_path: Path, transcript, segm
     no_vocals_source = vocals_path.with_name('no_vocals.mp3')
     if not no_vocals_source.is_file():
         return None
-    songs_dir = REPO_ROOT / 'output' / 'songs'
+    songs_dir = TRANSCRIPTS_DIR.parent / 'songs'
     songs_dir.mkdir(parents=True, exist_ok=True)
     output_path = songs_dir / f'[NoVocals] {source_audio.stem}.mp3'
     shutil.copy2(no_vocals_source, output_path)
@@ -622,7 +622,12 @@ def main():
     with LOG_PATH.open('a', encoding='utf-8') as log:
         log.write('\n' + summary)
     print(summary)
+    (TRANSCRIPTS_DIR.parent / 'processing_results.json').write_text(
+        json.dumps([{'file': name, 'status': status} for name, status in results], ensure_ascii=False),
+        encoding='utf-8',
+    )
+    return 1 if any(status.startswith('Failed') for _, status in results) else 0
 
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())

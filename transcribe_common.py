@@ -53,11 +53,12 @@ if _hf_token:
     os.environ.setdefault('HF_TOKEN', _hf_token)
     os.environ.setdefault('HUGGING_FACE_HUB_TOKEN', _hf_token)
 
-ROOT = (REPO_ROOT / 'input').resolve()
+WORK_DIR = Path(os.environ.get('SSTRANSCRIBER_WORK_DIR', str(REPO_ROOT))).resolve()
+ROOT = (WORK_DIR / 'input').resolve()
 SUPPORTED = {'.mp3', '.wav', '.flac', '.m4a', '.aac', '.ogg', '.opus', '.wma'}
-LOG_PATH = REPO_ROOT / 'output' / 'processing_log.txt'
-TRANSCRIPTS_DIR = REPO_ROOT / 'output' / 'transcripts'
-TEMP_DIR = REPO_ROOT / 'temp'
+LOG_PATH = WORK_DIR / 'output' / 'processing_log.txt'
+TRANSCRIPTS_DIR = WORK_DIR / 'output' / 'transcripts'
+TEMP_DIR = WORK_DIR / 'temp'
 ROOT.mkdir(parents=True, exist_ok=True)
 LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
 TRANSCRIPTS_DIR.mkdir(parents=True, exist_ok=True)
