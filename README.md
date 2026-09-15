@@ -133,6 +133,15 @@ line can be selected to seek to its timestamp. Files without embedded `SYLT` lyr
 Transcription jobs started from the Web UI automatically embed their final transcript as `USLT` and
 `SYLT` metadata in each processed source file.
 
+The **Health** workspace at `/health` displays live metrics for the machine running the API:
+total and per-logical-processor CPU usage, RAM usage, used/free capacity for accessible mounted
+drives, aggregate network receive/send rates and counters, and NVIDIA GPU utilization, VRAM,
+and temperature. It refreshes approximately every two seconds while visible and marks retained
+readings as stale when a request fails. GPU monitoring requires `nvidia-smi`; unsupported GPUs
+or unavailable driver readings are shown as unavailable. The API uses `psutil` for host metrics
+without importing Torch. Existing installations should rerun `python .\_initialize_web_api.py`
+to install the added dependency and rebuild the frontend, then restart the API.
+
 ## Usage
 
 1. Drop audio files into `input/` (subfolders are scanned recursively).

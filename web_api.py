@@ -1,17 +1,21 @@
 import argparse
 import ast
 import asyncio
+import csv
 import json
+import math
 import os
 import signal
 import subprocess
 import sys
+import time
 import uuid
 from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 
+import psutil
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -325,6 +329,77 @@ app.add_middleware(
 )
 
 
+def gpu_health():
+    try:
+        result = subprocess.run(
+            ['nvidia-smi', '--query-gpu=index,name,utilization.gpu,memory.used,memory.total,temperature.gpu',
+             '--format=csv,noheader,nounits'],
+            capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=3,
+            check=False,
+        )
+        if result.returncode != 0:
+            return {'devices': [], 'unavailable_reason': 'NVIDIA GPU metrics are unavailable.'}
+    except (OSError, subprocess.TimeoutExpired):
+        return {'devices': [], 'unavailable_reason': 'NVIDIA monitoring is unavailable. A supported GPU and nvidia-smi are required.'}
+
+    def number(value):
+        try:
+            parsed = float(value)
+            return parsed if math.isfinite(parsed) and parsed >= 0 else None
+        except ValueError:
+            return None
+
+    devices = []
+    for row in csv.reader(result.stdout.splitlines(), skipinitialspace=True):
+        if len(row) != 6:
+            continue
+        index, name, utilization, used, total, temperature = row
+        used_mib, total_mib = number(used), number(total)
+        devices.append({
+            'id': index.strip(), 'name': name.strip(), 'percent': number(utilization),
+            'memory_used': used_mib * 1024 ** 2 if used_mib is not None else None,
+            'memory_total': total_mib * 1024 ** 2 if total_mib is not None else None,
+            'temperature': number(temperature),
+        })
+    return {'devices': devices, 'unavailable_reason': None if devices else 'No NVIDIA GPUs detected.'}
+
+
+@app.get('/api/health')
+def get_health():
+    network_before = psutil.net_io_counters()
+    started = time.monotonic()
+    cores = psutil.cpu_percent(interval=0.25, percpu=True)
+    network_after = psutil.net_io_counters()
+    elapsed = time.monotonic() - started
+    memory = psutil.virtual_memory()
+    storage = []
+    for partition in psutil.disk_partitions(all=False):
+        if 'cdrom' in partition.opts or not partition.fstype:
+            continue
+        try:
+            usage = psutil.disk_usage(partition.mountpoint)
+        except OSError:
+            continue
+        storage.append({
+            'path': partition.mountpoint, 'device': partition.device,
+            'total': usage.total, 'used': usage.used, 'free': usage.free, 'percent': usage.percent,
+        })
+    network = None
+    if network_before is not None and network_after is not None:
+        network = {
+            'received_per_second': max(0, network_after.bytes_recv - network_before.bytes_recv) / elapsed,
+            'sent_per_second': max(0, network_after.bytes_sent - network_before.bytes_sent) / elapsed,
+            'received_total': network_after.bytes_recv, 'sent_total': network_after.bytes_sent,
+        }
+    return {
+        'sampled_at': utc_now(),
+        'cpu': {'percent': sum(cores) / len(cores) if cores else 0, 'cores': cores},
+        'memory': {'total': memory.total, 'used': memory.total - memory.available,
+                   'available': memory.available, 'percent': memory.percent},
+        'storage': storage, 'network': network, 'gpu': gpu_health(),
+    }
+
+
 @app.get('/api/config')
 def get_config():
     return {
@@ -480,6 +555,7 @@ def get_transcript(relative_path: str):
 
 
 if WEB_DIST.is_dir():
+    @app.get('/health', include_in_schema=False)
     @app.get('/music', include_in_schema=False)
     @app.get('/results', include_in_schema=False)
     def get_webui_route():

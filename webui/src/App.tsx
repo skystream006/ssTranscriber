@@ -36,6 +36,7 @@ import {
   WandSparkles,
 } from 'lucide-react'
 import MusicPlayer from './MusicPlayer'
+import Health from './Health'
 
 type BackendConfig = {
   models: string[]
@@ -51,7 +52,7 @@ type AppConfig = {
 
 type JobStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'
 type Theme = 'light' | 'dark' | 'royal-blue' | 'royal-purple' | 'black' | 'yellow'
-type View = 'run' | 'music' | 'results'
+type View = 'run' | 'music' | 'results' | 'health'
 type ViewTransitionDocument = Document & {
   startViewTransition?: (update: () => void) => { ready: Promise<void> }
 }
@@ -141,7 +142,7 @@ const themeOptions: { value: Theme; label: string; colors: [string, string] }[] 
   { value: 'yellow', label: 'Yellow', colors: ['#f3cf3f', '#3d3208'] },
 ]
 const darkThemes = new Set<Theme>(['dark', 'royal-blue', 'royal-purple', 'black'])
-const viewPaths: Record<View, string> = { run: '/', music: '/music', results: '/results' }
+const viewPaths: Record<View, string> = { run: '/', music: '/music', results: '/results', health: '/health' }
 const configurationsStorageKey = 'ss-transcriber-configurations-v1'
 const defaultConfigurationStorageKey = 'ss-transcriber-default-configuration-v1'
 
@@ -157,6 +158,7 @@ function readSavedConfigurations(): SavedConfiguration[] {
 }
 
 function viewFromPath(pathname: string): View {
+  if (pathname === '/health' || pathname.startsWith('/health/')) return 'health'
   if (pathname === '/music' || pathname.startsWith('/music/')) return 'music'
   if (pathname === '/results' || pathname.startsWith('/results/')) return 'results'
   return 'run'
@@ -646,6 +648,9 @@ export default function App() {
           <button className={view === 'results' ? 'active' : ''} onClick={() => navigate('results')}>
             <Archive /> <span className="nav-label">Results</span> <span className="nav-count">{transcripts.length}</span>
           </button>
+          <button className={view === 'health' ? 'active' : ''} aria-label="Health" title="Health" onClick={() => navigate('health')}>
+            <Activity /> <span className="nav-label">Health</span>
+          </button>
         </nav>
         <div className="sidebar-foot">
           <span className="health-dot" /> API connected
@@ -657,7 +662,7 @@ export default function App() {
         <header className="topbar">
           <div>
             <span className="eyebrow">Local audio workspace</span>
-            <h1>{view === 'run' ? 'Transcription desk' : view === 'music' ? 'Music player' : 'Transcript archive'}</h1>
+            <h1>{view === 'run' ? 'Transcription desk' : view === 'music' ? 'Music player' : view === 'health' ? 'System health' : 'Transcript archive'}</h1>
           </div>
           <div className="topbar-actions">
             <details className="theme-picker" ref={themeMenuRef}>
@@ -914,6 +919,8 @@ export default function App() {
           </div>
         ) : view === 'music' ? (
           <MusicPlayer files={musicFiles} onRefresh={refreshMusicFiles} />
+        ) : view === 'health' ? (
+          <Health />
         ) : (
           <div className="results-layout">
             <section className="result-list">
