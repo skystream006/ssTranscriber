@@ -10,6 +10,7 @@ type EndpointJob = {
   started_at: string | null
   finished_at: string | null
   return_code: number | null
+  cancel_requested: boolean
   log_count: number
   logs?: string[]
   request: {
@@ -47,16 +48,39 @@ export default function EndpointJobs() {
   const [detail, setDetail] = useState<EndpointJob | null>(null)
   const [filter, setFilter] = useState<'active' | 'all'>('active')
   const [error, setError] = useState<string | null>(null)
+  const [cancelError, setCancelError] = useState<string | null>(null)
+  const [cancellingId, setCancellingId] = useState<string | null>(null)
   const [loaded, setLoaded] = useState(false)
   const [refresh, setRefresh] = useState(0)
   const [updatedAt, setUpdatedAt] = useState<string | null>(null)
   const logRef = useRef<HTMLPreElement>(null)
 
   const select = (id: string) => {
+    setCancelError(null)
     selectedIdRef.current = id
     setSelectedId(id)
     setDetail(null)
     setRefresh((current) => current + 1)
+  }
+
+  const cancel = async (job: EndpointJob) => {
+    setCancellingId(job.id)
+    setCancelError(null)
+    try {
+      const response = await fetch(`/api/endpoint-jobs/${job.id}`, { method: 'DELETE', signal: AbortSignal.timeout(10000) })
+      if (!response.ok) {
+        const body = await response.json().catch(() => null)
+        throw new Error(typeof body?.detail === 'string' ? body.detail : `Could not cancel upload (${response.status}).`)
+      }
+      const updated: EndpointJob = await response.json()
+      setJobs((current) => current.map((item) => item.id === updated.id ? updated : item))
+      if (selectedIdRef.current === updated.id) setDetail(updated)
+    } catch (reason) {
+      setCancelError(reason instanceof Error ? reason.message : 'Could not cancel upload.')
+    } finally {
+      setCancellingId(null)
+      setRefresh((current) => current + 1)
+    }
   }
 
   useEffect(() => {
@@ -116,6 +140,7 @@ export default function EndpointJobs() {
         <button className="icon-button" type="button" title="Refresh endpoint jobs" aria-label="Refresh endpoint jobs" onClick={() => setRefresh((current) => current + 1)}><RefreshCw /></button>
       </div>
       {error && <div className="error-banner" role="alert">{error} Retrying automatically; displayed data may be stale.</div>}
+      {cancelError && <div className="error-banner" role="alert">{cancelError}</div>}
       <div className="endpoint-jobs-layout">
         <section className="activity-panel endpoint-job-list">
           <div className="activity-head"><div><span className="eyebrow">POST /api/transcribe</span><h2>Upload requests</h2></div></div>
@@ -137,7 +162,15 @@ export default function EndpointJobs() {
         <section className="activity-panel endpoint-job-detail">
           <div className="activity-head">
             <div><span className="eyebrow">Live processing details</span><h2>{selected?.filename ?? 'Select an upload'}</h2></div>
-            {selected && <span className={`status ${selected.status}`}><StatusIcon status={selected.status} /> {selected.status}</span>}
+            {selected && <div className="activity-head-actions">
+              <span className={`status ${selected.status}`}><StatusIcon status={selected.status} /> {active(selected) && selected.cancel_requested ? 'Cancelling' : selected.status}</span>
+              {active(selected) && <button className="icon-button" type="button"
+                title={selected.cancel_requested || cancellingId === selected.id ? 'Cancelling upload' : 'Cancel upload'}
+                aria-label={selected.cancel_requested || cancellingId === selected.id ? 'Cancelling upload' : 'Cancel upload'}
+                disabled={selected.cancel_requested || cancellingId !== null} onClick={() => void cancel(selected)}>
+                {selected.cancel_requested || cancellingId === selected.id ? <LoaderCircle className="spin" /> : <Ban />}
+              </button>}
+            </div>}
           </div>
           {selected ? <>
             <div className="progress-block">

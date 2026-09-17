@@ -5,7 +5,9 @@ Run: python -m unittest discover -s tests -v (requires httpx).
 import asyncio
 import io
 import json
+import sys
 import tempfile
+import threading
 import unittest
 import zipfile
 from pathlib import Path
@@ -317,6 +319,121 @@ class UploadAPITests(unittest.TestCase):
             self.assertEqual(self.client.get(f'/api/endpoint-jobs/{local.id}').status_code, 404)
 
     def test_cancelled_queued_upload_is_marked_cancelled(self):
+        self.assertEqual(self.client.delete('/api/endpoint-jobs/missing').status_code, 404)
+        local = web_api.Job(web_api.JobRequest())
+        web_api.jobs[local.id] = local
+        self.assertEqual(self.client.delete(f'/api/endpoint-jobs/{local.id}').status_code, 404)
+
+        async def exercise():
+            queued = asyncio.Event()
+            original_run = web_api.run_job
+
+            async def observe_queue(job):
+                queued.set()
+                await original_run(job)
+
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=web_api.app), base_url='http://test') as client:
+                async with web_api.job_lock:
+                    with patch.object(web_api, 'run_job', observe_queue):
+                        request = asyncio.create_task(client.post('/api/transcribe', files={'file': ('cancel.mp3', b'audio')}))
+                        try:
+                            await asyncio.wait_for(queued.wait(), timeout=10)
+                            job = next(iter(web_api.endpoint_jobs.values()))
+                            response = await client.delete(f'/api/endpoint-jobs/{job.id}')
+                            self.assertEqual(response.status_code, 202)
+                            self.assertTrue(response.json()['cancel_requested'])
+                            response = await asyncio.wait_for(request, timeout=10)
+                            self.assertEqual(response.status_code, 409)
+                            self.assertEqual(response.json()['detail'], 'Upload job cancelled')
+                            self.assertIsNone(job.started_at)
+                            self.assertIsNone(job.process)
+                            self.assertEqual(job.status, 'cancelled')
+                            self.assertIsNotNone(job.finished_at)
+                            self.assertEqual((await client.delete(f'/api/endpoint-jobs/{job.id}')).status_code, 409)
+                        finally:
+                            request.cancel()
+                            await asyncio.gather(request, return_exceptions=True)
+
+        asyncio.run(exercise())
+        self.assert_clean()
+
+    def test_cancel_running_endpoint_job_terminates_process_and_releases_queue(self):
+        async def exercise():
+            started = asyncio.Event()
+            processes = []
+            original_spawn = asyncio.create_subprocess_exec
+
+            async def spawn(*args, **kwargs):
+                process = await original_spawn(
+                    sys.executable, '-u', '-c', 'import threading; threading.Event().wait()', **kwargs,
+                )
+                processes.append(process)
+                started.set()
+                return process
+
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=web_api.app), base_url='http://test') as client:
+                with patch.object(web_api.asyncio, 'create_subprocess_exec', spawn):
+                    request = asyncio.create_task(client.post('/api/transcribe', files={'file': ('running.mp3', b'audio')}))
+                    try:
+                        await asyncio.wait_for(started.wait(), timeout=10)
+                        job = next(iter(web_api.endpoint_jobs.values()))
+                        self.assertEqual(job.status, 'running')
+                        self.assertEqual((await client.delete(f'/api/endpoint-jobs/{job.id}')).status_code, 202)
+                        response = await asyncio.wait_for(request, timeout=10)
+                        self.assertEqual(response.status_code, 409)
+                        self.assertEqual(job.status, 'cancelled')
+                        self.assertIsNotNone(job.finished_at)
+                        self.assertIsNotNone(processes[0].returncode)
+                        self.assertIsNone(job.processing_task)
+                        self.assertFalse(web_api.job_lock.locked())
+                    finally:
+                        request.cancel()
+                        await asyncio.gather(request, return_exceptions=True)
+                response = await client.post('/api/transcribe', files={'file': ('next.mp3', b'audio')})
+                self.assertEqual(response.status_code, 200, response.text)
+                finished = next(job for job in web_api.endpoint_jobs.values() if job.status == 'completed')
+                self.assertEqual((await client.delete(f'/api/endpoint-jobs/{finished.id}')).status_code, 409)
+
+        asyncio.run(exercise())
+        self.assert_clean()
+
+    def test_cancel_during_download_preparation_discards_result(self):
+        async def exercise():
+            preparing = asyncio.Event()
+            release = threading.Event()
+            loop = asyncio.get_running_loop()
+
+            async def finish_processing(job):
+                job.status = 'running'
+                job.return_code = 0
+
+            def prepare_result(work_dir, song, filename, copy_no_vocals):
+                loop.call_soon_threadsafe(preparing.set)
+                if not release.wait(timeout=10):
+                    raise TimeoutError('Download preparation was not released')
+                self.assertTrue(song.is_file())
+                return song, filename, 'application/octet-stream'
+
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=web_api.app), base_url='http://test') as client:
+                with patch.object(web_api, 'run_job', finish_processing), patch.object(web_api, 'upload_result', prepare_result):
+                    request = asyncio.create_task(client.post('/api/transcribe', files={'file': ('packing.mp3', b'audio')}))
+                    try:
+                        await asyncio.wait_for(preparing.wait(), timeout=10)
+                        job = next(iter(web_api.endpoint_jobs.values()))
+                        for attempt in range(2):
+                            self.assertEqual((await client.delete(f'/api/endpoint-jobs/{job.id}')).status_code, 202)
+                        self.assertTrue(job.work_dir.is_dir())
+                    finally:
+                        release.set()
+                        response = await asyncio.wait_for(request, timeout=10)
+                    self.assertEqual(response.status_code, 409)
+                    self.assertNotIn('content-disposition', response.headers)
+                    self.assertEqual(job.status, 'cancelled')
+
+        asyncio.run(exercise())
+        self.assert_clean()
+
+    def test_disconnected_queued_upload_is_marked_cancelled(self):
         async def exercise():
             queued = asyncio.Event()
             original_run = web_api.run_job

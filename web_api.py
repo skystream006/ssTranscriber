@@ -241,6 +241,7 @@ class Job:
         self.return_code = None
         self.logs = deque(maxlen=4000)
         self.process = None
+        self.processing_task = None
         self.cancel_requested = False
         self.work_dir = work_dir
         self.upload_name = upload_name
@@ -255,6 +256,7 @@ class Job:
             'started_at': self.started_at,
             'finished_at': self.finished_at,
             'return_code': self.return_code,
+            'cancel_requested': self.cancel_requested,
             'request': self.request.model_dump(),
             'log_count': len(self.logs),
         }
@@ -358,7 +360,8 @@ async def run_job(job: Job):
                 if os.name == 'nt':
                     await asyncio.to_thread(subprocess.run, ['taskkill', '/PID', str(job.process.pid), '/T', '/F'], capture_output=True, check=False)
                 else:
-                    os.killpg(job.process.pid, signal.SIGKILL)
+                    with suppress(ProcessLookupError):
+                        os.killpg(job.process.pid, signal.SIGKILL)
                 await job.process.wait()
             job.status = 'cancelled'
             raise
@@ -613,7 +616,17 @@ async def transcribe_upload(
         job.filename = filename
         endpoint_jobs[job.id] = job
         prune_endpoint_jobs()
-        await run_job(job)
+        job.processing_task = asyncio.create_task(run_job(job))
+        try:
+            await job.processing_task
+        except asyncio.CancelledError:
+            if not job.cancel_requested:
+                raise
+        finally:
+            job.processing_task = None
+        if job.cancel_requested:
+            job.status = 'cancelled'
+            raise HTTPException(status_code=409, detail='Upload job cancelled')
         if job.status != 'running' or job.return_code != 0:
             raise HTTPException(status_code=500, detail={
                 'message': 'Song processing failed', 'logs': list(job.logs)[-30:],
@@ -622,6 +635,9 @@ async def transcribe_upload(
         path, download_name, media_type = await asyncio.to_thread(
             upload_result, work_dir, song, filename, settings.copy_no_vocals,
         )
+        if job.cancel_requested:
+            job.status = 'cancelled'
+            raise HTTPException(status_code=409, detail='Upload job cancelled')
         response = FileResponse(path, filename=download_name, media_type=media_type,
                                 headers={'X-Job-ID': job.id},
                                 background=BackgroundTask(shutil.rmtree, work_dir, ignore_errors=True))
@@ -738,6 +754,21 @@ def get_endpoint_job(job_id: str):
     job = endpoint_jobs.get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail='Endpoint job not found')
+    return job.public(include_logs=True)
+
+
+@app.delete('/api/endpoint-jobs/{job_id}', status_code=202)
+async def cancel_endpoint_job(job_id: str):
+    job = endpoint_jobs.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail='Endpoint job not found')
+    if job.status not in {'queued', 'running'}:
+        raise HTTPException(status_code=409, detail='Endpoint job has already finished')
+    if not job.cancel_requested:
+        job.cancel_requested = True
+        job.logs.append('Cancellation requested from endpoint jobs.')
+        if job.processing_task is not None:
+            job.processing_task.cancel()
     return job.public(include_logs=True)
 
 

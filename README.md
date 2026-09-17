@@ -183,8 +183,16 @@ also shows completed, failed, and cancelled requests. These jobs remain separate
 Transcribe jobs. Completion means processing and download preparation succeeded; it does
 not confirm that the client finished downloading. Downloads still go to the original caller.
 
+Select a queued or running upload and use **Cancel upload** in its details header to
+cancel it. Queued uploads leave the queue immediately; running processing and its child
+processes are terminated. Cancellation during download preparation waits for packaging
+to finish before removing temporary files. The original upload caller receives HTTP
+`409` instead of a download, and the job remains in recent history as cancelled.
+
 - `GET /api/endpoint-jobs`: list upload jobs, newest first, without logs.
 - `GET /api/endpoint-jobs/{job_id}`: fetch one upload job including captured logs.
+- `DELETE /api/endpoint-jobs/{job_id}`: request cancellation (`202`); unknown jobs return
+  `404`, and already-finished jobs return `409`. `cancel_requested` indicates a pending cancellation.
 - Successful upload responses include an `X-Job-ID` header for correlation.
 
 All active jobs and the latest 100 finished upload records are retained in memory.
