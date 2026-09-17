@@ -1,0 +1,57 @@
+name: Container validation
+
+on:
+  pull_request:
+    paths:
+      - '**.py'
+      - 'Dockerfile'
+      - '.dockerignore'
+      - 'docker/**'
+      - 'compose*.yaml'
+      - 'requirements-webui.txt'
+      - 'requirements-test.txt'
+      - 'webui/**'
+      - '.github/workflows/container.yml'
+  push:
+    branches: [main, master]
+    paths:
+      - '**.py'
+      - 'Dockerfile'
+      - '.dockerignore'
+      - 'docker/**'
+      - 'compose*.yaml'
+      - 'requirements-webui.txt'
+      - 'requirements-test.txt'
+      - 'webui/**'
+      - '.github/workflows/container.yml'
+  workflow_dispatch:
+    inputs:
+      device:
+        description: Image dependency variant (build tests do not require a GPU)
+        type: choice
+        options: [cpu, gpu]
+        default: cpu
+
+permissions:
+  contents: read
+
+jobs:
+  container:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Compose variants
+        run: |
+          docker compose config --quiet
+          docker compose -f compose.yaml -f compose.gpu.yaml config --quiet
+      - uses: docker/setup-buildx-action@v3
+      - name: Build and test Linux runtime
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: test
+          build-args: DEVICE=${{ inputs.device || 'cpu' }}
+          push: false
+          cache-from: type=gha,scope=container-${{ inputs.device || 'cpu' }}
+          cache-to: type=gha,mode=max,scope=container-${{ inputs.device || 'cpu' }}

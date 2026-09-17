@@ -1,0 +1,14 @@
+# Merge with compose.yaml; requires NVIDIA GPU passthrough and a CUDA 12.8-capable driver.
+services:
+  sstranscriber:
+    image: sstranscriber:gpu
+    build:
+      args:
+        DEVICE: gpu
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

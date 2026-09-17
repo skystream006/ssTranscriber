@@ -1,4 +1,5 @@
 import argparse
+import os
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -12,8 +13,9 @@ for _stream in (sys.stdout, sys.stderr):
         pass
 
 REPO_ROOT = Path(__file__).resolve().parent
-INPUT_ROOT = REPO_ROOT / 'input'
-LOG_PATH = REPO_ROOT / 'output' / 'clear_metadata_log.txt'
+WORK_DIR = Path(os.environ.get('SSTRANSCRIBER_WORK_DIR', str(REPO_ROOT))).resolve()
+INPUT_ROOT = WORK_DIR / 'input'
+LOG_PATH = WORK_DIR / 'output' / 'clear_metadata_log.txt'
 SUPPORTED = {'.mp3', '.wav', '.flac', '.m4a', '.aac', '.ogg', '.opus', '.wma'}
 
 

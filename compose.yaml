@@ -1,0 +1,26 @@
+services:
+  sstranscriber:
+    image: sstranscriber:cpu
+    build:
+      context: .
+      target: runtime
+      args:
+        DEVICE: cpu
+        APP_UID: ${SSTRANSCRIBER_UID:-1000}
+        APP_GID: ${SSTRANSCRIBER_GID:-1000}
+    ports:
+      # Separate from the local development API; do not expose an unauthenticated API publicly.
+      - "127.0.0.1:${SSTRANSCRIBER_DOCKER_PORT:-8767}:8000"
+    environment:
+      SSTRANSCRIBER_WORK_DIR: /data
+      HF_HOME: /cache/huggingface
+      TORCH_HOME: /cache/torch
+      HF_TOKEN: ${HF_TOKEN:-}
+    volumes:
+      - ${SSTRANSCRIBER_DATA_DIR:-./docker-data}:/data
+      - model-cache:/cache
+    restart: unless-stopped
+    stop_grace_period: 30s
+
+volumes:
+  model-cache:

@@ -26,7 +26,6 @@ class UploadAPITests(unittest.TestCase):
         self.seen_jobs = []
         original_command = web_api.build_command
         original_run_job = web_api.run_job
-        original_mkdtemp = tempfile.mkdtemp
 
         def command(request):
             result = original_command(request)
@@ -44,7 +43,7 @@ class UploadAPITests(unittest.TestCase):
             patch.object(web_api, 'job_lock', asyncio.Lock()),
             patch.object(web_api, 'endpoint_jobs', {}),
             patch.object(web_api, 'jobs', {}),
-            patch.object(web_api.tempfile, 'mkdtemp', lambda **kw: original_mkdtemp(dir=self.root, **kw)),
+            patch.object(web_api, 'TEMP_DIR', self.root),
         ):
             patcher.start()
             self.addCleanup(patcher.stop)

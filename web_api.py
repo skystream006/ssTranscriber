@@ -29,12 +29,13 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from starlette.background import BackgroundTask
 
 REPO_ROOT = Path(__file__).resolve().parent
-INPUT_DIR = (REPO_ROOT / 'input').resolve()
-OUTPUT_DIR = (REPO_ROOT / 'output').resolve()
+WORK_DIR = Path(os.environ.get('SSTRANSCRIBER_WORK_DIR', str(REPO_ROOT))).resolve()
+INPUT_DIR = (WORK_DIR / 'input').resolve()
+OUTPUT_DIR = (WORK_DIR / 'output').resolve()
 SONGS_DIR = (OUTPUT_DIR / 'songs').resolve()
-TEMP_DIR = (REPO_ROOT / 'temp').resolve()
+TEMP_DIR = (WORK_DIR / 'temp').resolve()
 WEB_DIST = REPO_ROOT / 'webui' / 'dist'
-ENDPOINT_CONFIG_PATH = REPO_ROOT / '.endpoint-config.json'
+ENDPOINT_CONFIG_PATH = WORK_DIR / '.endpoint-config.json'
 CLEANUP_MAX_AGE_DAYS = 30
 CLEANUP_INTERVAL_SECONDS = 24 * 60 * 60
 SUPPORTED_AUDIO = {'.mp3', '.wav', '.flac', '.m4a', '.aac', '.ogg', '.opus', '.wma'}
@@ -331,9 +332,12 @@ async def run_job(job: Job):
         kwargs = {'creationflags': creationflags} if os.name == 'nt' else {'start_new_session': True}
         try:
             command = build_command(job.request)
+            kwargs['env'] = {
+                **os.environ,
+                'SSTRANSCRIBER_WORK_DIR': str(job.work_dir if job.work_dir is not None else WORK_DIR),
+            }
             if job.work_dir is not None:
                 command.extend(['--file', job.upload_name])
-                kwargs['env'] = {**os.environ, 'SSTRANSCRIBER_WORK_DIR': str(job.work_dir)}
             job.process = await asyncio.create_subprocess_exec(
                 *command,
                 cwd=REPO_ROOT,
@@ -376,6 +380,10 @@ def cleanup_old_generated_files(now: float | None = None):
             continue
         for path in root.rglob('*'):
             try:
+                # Upload workspaces own their lifecycle. Never age-delete files in
+                # a live request (an unusually long upload can span a cleanup run).
+                if root == TEMP_DIR and path.relative_to(root).parts[0].startswith('ss-transcriber-api-'):
+                    continue
                 if path.is_file() and path.stat().st_mtime < cutoff:
                     path.unlink()
                     deleted += 1
@@ -393,6 +401,8 @@ async def scheduled_cleanup():
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    for directory in (INPUT_DIR, SONGS_DIR, TEMP_DIR):
+        directory.mkdir(parents=True, exist_ok=True)
     deleted, failures = await asyncio.to_thread(cleanup_old_generated_files)
     print(f'Generated-file cleanup: deleted {deleted}, failed {len(failures)}', flush=True)
     cleanup_task = asyncio.create_task(scheduled_cleanup())
@@ -411,6 +421,12 @@ app.add_middleware(
     allow_methods=['*'],
     allow_headers=['*'],
 )
+
+
+@app.get('/api/ready')
+def readiness():
+    """Cheap container liveness check; does not load models or query the GPU."""
+    return {'status': 'ok'}
 
 
 def gpu_health():
@@ -515,6 +531,7 @@ def save_endpoint_config(settings: EndpointSettings):
     validate_processing_profiles(settings)
     temporary = ENDPOINT_CONFIG_PATH.with_suffix(f'.{uuid.uuid4().hex}.tmp')
     try:
+        ENDPOINT_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
         temporary.write_text(settings.model_dump_json(indent=2) + '\n', encoding='utf-8')
         temporary.replace(ENDPOINT_CONFIG_PATH)
     except OSError as exc:
@@ -589,7 +606,8 @@ async def transcribe_upload(
             processing_options['language'] = language.lower()
         request = JobRequest(**processing_options, use_lyrics=bool(lyrics), lyrics_mode=lyrics_mode,
                              save_previous_results=False)
-        work_dir = Path(tempfile.mkdtemp(prefix='ss-transcriber-api-'))
+        TEMP_DIR.mkdir(parents=True, exist_ok=True)
+        work_dir = Path(tempfile.mkdtemp(prefix='ss-transcriber-api-', dir=TEMP_DIR))
         song = await asyncio.to_thread(prepare_upload, work_dir, file.file, suffix, lyrics)
         job = Job(request, work_dir=work_dir, upload_name=song.name)
         job.filename = filename
@@ -808,7 +826,8 @@ if __name__ == '__main__':
     import uvicorn
 
     parser = argparse.ArgumentParser(description='Run the local ssTranscriber Web API.')
+    parser.add_argument('--host', default='127.0.0.1', help='Listening address (default: localhost; use 0.0.0.0 in containers).')
     parser.add_argument('--port', type=port_number, default=configured_port(), help='Listening port (default: WEB_API_PORT or 8000).')
     parser.add_argument('--reload', action='store_true', help='Reload the API when Python source files change.')
     args = parser.parse_args()
-    uvicorn.run('web_api:app', host='127.0.0.1', port=args.port, reload=args.reload)
+    uvicorn.run('web_api:app', host=args.host, port=args.port, reload=args.reload)

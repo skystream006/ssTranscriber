@@ -12,6 +12,14 @@ them. Tagging uses [Mutagen](https://mutagen.readthedocs.io/).
 Optional `pho-whisper` and `viet-lyrics` backends are also available if you provide a compatible
 runtime and model.
 
+## Docker (optional)
+
+CPU and NVIDIA GPU container deployments are available alongside the existing local
+Python/Node workflow. See [Docker deployment and development](docker/README.md) for
+startup commands, GPU prerequisites, persistent storage, permissions, and validation.
+The default container uses a separate data directory and host port `8767`; local
+development does not require Docker and retains its existing defaults.
+
 ## Requirements
 
 - Python 3.9+

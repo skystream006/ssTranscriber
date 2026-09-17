@@ -1,0 +1,10 @@
+# Keep the CPU/CUDA build selected in the earlier image stage; == also matches +cpu/+cu128.
+# TorchAudio 2.8 retains the audio I/O APIs used by Demucs (2.9 switches to TorchCodec).
+torch==2.8.0
+torchaudio==2.8.0
+torchvision==0.23.0
+numpy==1.26.4
+setuptools==80.9.0
+# Match the locally validated API/TestClient stack rather than floating to new APIs.
+fastapi==0.141.1
+starlette==1.6.0

@@ -16,7 +16,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from transcribe_common import (
-    REPO_ROOT,
+    WORK_DIR,
     ROOT,
     TRANSCRIPTS_DIR,
     colorize,
@@ -26,7 +26,7 @@ from transcribe_common import (
     write_lyrics_to_file,
 )
 
-LOG_PATH = REPO_ROOT / 'output' / 'embed_lyrics_log.txt'
+LOG_PATH = WORK_DIR / 'output' / 'embed_lyrics_log.txt'
 
 
 def timestamp():
