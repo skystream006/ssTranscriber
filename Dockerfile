@@ -27,8 +27,11 @@ COPY docker/constraints.txt /opt/constraints.txt
 ENV PIP_CONSTRAINT=/opt/constraints.txt
 
 FROM python-base AS cpu
+COPY docker/constraints-cpu.txt /opt/constraints-cpu.txt
+ENV PIP_CONSTRAINT=/opt/constraints-cpu.txt \
+    SSTRANSCRIBER_BUILD_DEVICE=cpu
 RUN python -m pip install --no-cache-dir \
-    torch==2.8.0 torchaudio==2.8.0 torchvision==0.23.0 \
+    torch==2.8.0+cpu torchaudio==2.8.0+cpu torchvision==0.23.0+cpu \
     --index-url https://download.pytorch.org/whl/cpu
 
 FROM python-base AS gpu

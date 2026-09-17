@@ -20,6 +20,53 @@ startup commands, GPU prerequisites, persistent storage, permissions, and valida
 The default container uses a separate data directory and host port `8767`; local
 development does not require Docker and retains its existing defaults.
 
+On Windows, start Docker Desktop with Linux containers enabled. Run the commands
+below in PowerShell from the repository root. Choose either CPU or GPU; do not run
+both variants simultaneously against the same storage and port.
+
+### CPU
+
+The default build uses CPU-only PyTorch wheels and requires no NVIDIA driver or GPU
+passthrough. Build and start it with:
+
+```powershell
+docker compose up --build -d
+```
+
+### NVIDIA GPU
+
+Requires working Docker Desktop/WSL2 GPU passthrough and an NVIDIA driver supporting
+CUDA 12.8.
+
+```powershell
+docker compose -f compose.yaml -f compose.gpu.yaml up --build -d
+```
+
+Open http://127.0.0.1:8767. For CPU jobs, select **CPU** in the UI; for GPU jobs,
+select **Automatic** or the exposed CUDA device.
+
+### View logs
+
+```powershell
+# CPU
+docker compose logs -f
+
+# GPU
+docker compose -f compose.yaml -f compose.gpu.yaml logs -f
+```
+
+### Stop
+
+```powershell
+# CPU
+docker compose down
+
+# GPU
+docker compose -f compose.yaml -f compose.gpu.yaml down
+```
+
+Stopping retains your data and cached models. Source audio goes in `docker-data/input`.
+
 ## Requirements
 
 - Python 3.9+

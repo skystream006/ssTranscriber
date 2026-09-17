@@ -17,6 +17,10 @@ development, and repository-relative data paths remain the defaults outside Dock
 
 ## Start a CPU container
 
+The default build pins CPU-only PyTorch, TorchAudio, and TorchVision wheels across
+all dependency installs. Build-time verification rejects CUDA-enabled PyTorch or
+installed NVIDIA runtime packages. No NVIDIA driver or GPU passthrough is required.
+
 From the repository root:
 
 ```sh

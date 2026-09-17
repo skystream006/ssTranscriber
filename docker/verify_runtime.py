@@ -2,6 +2,7 @@
 import ctypes
 import os
 import tempfile
+from importlib.metadata import distributions
 from pathlib import Path
 
 # Check dynamic linker discovery before importing Torch (which preloads CUDA libs).
@@ -20,6 +21,14 @@ from demucs.audio import save_audio
 from faster_whisper.audio import decode_audio
 from transformers import pipeline
 
+
+if os.environ.get('SSTRANSCRIBER_BUILD_DEVICE') == 'cpu':
+    assert torch.version.cuda is None, 'CPU image contains CUDA-enabled PyTorch'
+    cuda_packages = sorted(
+        package.metadata['Name'] for package in distributions()
+        if package.metadata['Name'].lower().replace('_', '-').startswith('nvidia-')
+    )
+    assert not cuda_packages, f'CPU image contains NVIDIA packages: {cuda_packages}'
 
 with tempfile.TemporaryDirectory() as directory:
     waveform = torch.zeros(2, 4410)

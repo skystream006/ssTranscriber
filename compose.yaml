@@ -10,7 +10,7 @@ services:
         APP_GID: ${SSTRANSCRIBER_GID:-1000}
     ports:
       # Separate from the local development API; do not expose an unauthenticated API publicly.
-      - "127.0.0.1:${SSTRANSCRIBER_DOCKER_PORT:-8767}:8000"
+      - "${DOCKER_BIND_ADDRESS:-127.0.0.1}:${SSTRANSCRIBER_DOCKER_PORT:-8767}:8000"
     environment:
       SSTRANSCRIBER_WORK_DIR: /data
       HF_HOME: /cache/huggingface
