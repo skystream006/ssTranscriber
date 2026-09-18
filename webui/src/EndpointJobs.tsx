@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Ban, CircleCheck, CircleX, Clock3, Cpu, FileAudio, Gauge, LoaderCircle, RefreshCw, TerminalSquare } from 'lucide-react'
+import useLogScroll from './useLogScroll'
 
 type JobStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'
 type EndpointJob = {
@@ -53,7 +54,7 @@ export default function EndpointJobs() {
   const [loaded, setLoaded] = useState(false)
   const [refresh, setRefresh] = useState(0)
   const [updatedAt, setUpdatedAt] = useState<string | null>(null)
-  const logRef = useRef<HTMLPreElement>(null)
+  const logScroll = useLogScroll(selectedId, detail?.logs)
 
   const select = (id: string) => {
     setCancelError(null)
@@ -123,10 +124,6 @@ export default function EndpointJobs() {
     }
   }, [refresh, filter])
 
-  useEffect(() => {
-    if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight
-  }, [detail?.id, detail?.logs])
-
   const visibleJobs = jobs.filter((job) => filter === 'all' || active(job))
     .sort((a, b) => Number(active(b)) - Number(active(a)))
   const selected = detail?.id === selectedId ? detail : jobs.find((job) => job.id === selectedId)
@@ -188,7 +185,7 @@ export default function EndpointJobs() {
             </div>
             <div className="console">
               <div className="console-head"><span><TerminalSquare /> Processing log</span><span>{selected.id}</span></div>
-              <pre ref={logRef} aria-label="Endpoint job processing log">{detail?.id === selected.id ? detail.logs?.join('\n') || 'Waiting for processing output…' : 'Loading log…'}</pre>
+              <pre {...logScroll} aria-label="Endpoint job processing log">{detail?.id === selected.id ? detail.logs?.join('\n') || 'Waiting for processing output…' : 'Loading log…'}</pre>
             </div>
           </> : <div className="empty-state"><TerminalSquare /><h3>Monitor an API request</h3><p>Select a job to view its settings, timestamps, and live processing log. Downloads are sent to the original API caller.</p></div>}
         </section>
