@@ -1,4 +1,5 @@
 """Run the real pipeline with deterministic ASR/Demucs substitutes (no GPU/models)."""
+import os
 import runpy
 import sys
 from pathlib import Path
@@ -12,18 +13,18 @@ sys.modules['torch'] = SimpleNamespace(cuda=SimpleNamespace(device_count=lambda:
 import backends
 import transcribe_common
 
-language = sys.argv[sys.argv.index('--language') + 1] if '--language' in sys.argv else None
+failure = os.environ.get('SSTRANSCRIBER_TEST_FAILURE')
 
 
 def transcribe(*args, **kwargs):
-    if language == 'fail':
+    if failure == 'fail':
         raise RuntimeError('Simulated recognition failure')
-    segments = [] if language == 'empty' else [SimpleNamespace(start=0.5, end=3.0, text='A gentle melody')]
+    segments = [] if failure == 'empty' else [SimpleNamespace(start=0.5, end=3.0, text='A gentle melody')]
     return segments, SimpleNamespace(language='en')
 
 
 def separate(path, device, output_root, use_mp3=False, mp3_bitrate=320):
-    if language == 'no-stems':
+    if failure == 'no-stems':
         raise RuntimeError('Simulated separation failure')
     destination = output_root / 'htdemucs' / path.stem
     destination.mkdir(parents=True, exist_ok=True)
@@ -38,7 +39,7 @@ original_embed = transcribe_common.write_lyrics_to_file
 
 
 def embed(*args, **kwargs):
-    if language == 'embed-fail':
+    if failure == 'embed-fail':
         raise OSError('Simulated embedding failure')
     return original_embed(*args, **kwargs)
 

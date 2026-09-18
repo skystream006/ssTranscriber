@@ -75,10 +75,10 @@ print(json.dumps({'root': str(web_api.WORK_DIR), 'settings': str(web_api.ENDPOIN
                     for path in ('input', 'output/songs', 'temp'):
                         self.assertTrue((root / path).is_dir())
                     settings = client.get('/api/endpoint-config').json()
-                    settings['language'] = 'vi'
+                    settings['opening_threshold'] = 7.5
                     self.assertEqual(client.put('/api/endpoint-config', json=settings).status_code, 200)
                 with TestClient(web_api.app) as client:
-                    self.assertEqual(client.get('/api/endpoint-config').json()['language'], 'vi')
+                    self.assertEqual(client.get('/api/endpoint-config').json()['opening_threshold'], 7.5)
 
     def test_library_and_upload_jobs_pass_the_correct_root_to_subprocesses(self):
         async def exercise(root):

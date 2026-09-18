@@ -93,7 +93,7 @@ type Job = {
   logs?: string[]
 }
 
-type EndpointSettings = Omit<JobRequest, 'file' | 'use_lyrics' | 'lyrics_mode' | 'save_previous_results'>
+type EndpointSettings = Omit<JobRequest, 'file' | 'use_lyrics' | 'lyrics_mode' | 'save_previous_results' | 'language' | 'demucs_mp3' | 'demucs_mp3_bitrate' | 'copy_no_vocals'>
 
 type Transcript = {
   path: string
@@ -580,7 +580,11 @@ export default function App() {
     setError(null)
     setEndpointSaved(false)
     try {
-      const { file: _file, use_lyrics: _useLyrics, lyrics_mode: _lyricsMode, save_previous_results: _archive, ...settings } = endpointForm
+      const {
+        file: _file, use_lyrics: _useLyrics, lyrics_mode: _lyricsMode, save_previous_results: _archive,
+        language: _language, demucs_mp3: _demucsMp3, demucs_mp3_bitrate: _bitrate, copy_no_vocals: _copyNoVocals,
+        ...settings
+      } = endpointForm
       await api<EndpointSettings>('/api/endpoint-config', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -883,13 +887,13 @@ export default function App() {
                       {(backendConfig?.models ?? [form.model]).map((model) => <option key={model}>{model}</option>)}
                     </select>
                   </label>
-                  <label className="field">
+                  {!isEndpoint && <label className="field">
                     <FieldLabel info="Select an ISO 639-1 language to force recognition, or use Auto-detect to identify it from the audio.">Language</FieldLabel>
                     <select value={form.language ?? ''} onChange={(event) => update('language', event.target.value || null)}>
                       <option value="">Auto-detect</option>
                       {languageOptions.map(({ code, label }) => <option key={code} value={code}>{label} ({code})</option>)}
                     </select>
-                  </label>
+                  </label>}
                   <label className="field">
                     <FieldLabel info="If separated-vocal transcription starts later than this many seconds, retry the original mix to recover a potentially clipped opening.">Opening threshold</FieldLabel>
                     <div className="unit-input"><input type="number" min="0" max="300" step="0.5" value={form.opening_threshold} onChange={(event) => update('opening_threshold', Number(event.target.value))} /><span>sec</span></div>
@@ -915,12 +919,12 @@ export default function App() {
                 <summary><WandSparkles /> Advanced <ChevronDown /></summary>
                 <div className="advanced-body">
                   <Toggle checked={form.vocal_separation} onChange={(value) => setForm((current) => ({ ...current, vocal_separation: value, demucs_mp3: value ? current.demucs_mp3 : false, copy_no_vocals: value ? current.copy_no_vocals : false }))} label="Separate vocals with Demucs" info="Isolate the vocal stem before recognition. This often improves song transcription but adds processing time and can occasionally clip quiet openings." />
-                  {form.vocal_separation && (
+                  {!isEndpoint && form.vocal_separation && (
                     <div className={`demucs-mp3-options ${form.demucs_mp3 ? 'expanded' : ''}`}>
                       <Toggle checked={form.demucs_mp3} onChange={(value) => setForm((current) => ({ ...current, demucs_mp3: value, copy_no_vocals: value ? current.copy_no_vocals : false }))} label="Store Demucs stem as MP3" info="Save separated vocals as a smaller lossy MP3 instead of the default WAV file." />
                       {form.demucs_mp3 && (
                         <div className="demucs-mp3-expanded">
-                          <Toggle checked={form.copy_no_vocals} onChange={(value) => update('copy_no_vocals', value)} label="Copy no-vocals song" info={isEndpoint ? 'Return a ZIP containing the processed song and Demucs accompaniment, both with embedded lyrics.' : 'Copy the Demucs accompaniment to output/songs with embedded USLT and synchronized SYLT lyrics.'} />
+                          <Toggle checked={form.copy_no_vocals} onChange={(value) => update('copy_no_vocals', value)} label="Copy no-vocals song" info="Copy the Demucs accompaniment to output/songs with embedded USLT and synchronized SYLT lyrics." />
                           <label className="field"><FieldLabel info="Set the MP3 bitrate for saved Demucs stems. Higher values preserve more audio detail but create larger files.">Demucs bitrate</FieldLabel><div className="unit-input"><input type="number" min="64" max="512" value={form.demucs_mp3_bitrate} onChange={(event) => update('demucs_mp3_bitrate', Number(event.target.value))} /><span>kbps</span></div></label>
                         </div>
                       )}
@@ -994,10 +998,12 @@ export default function App() {
                   <dt>file <small>required</small></dt><dd>A supported song file.</dd>
                   <dt>lyrics <small>optional</small></dt><dd>Plain-text lyrics. Omit or leave blank to transcribe without known lyrics.</dd>
                   <dt>lyrics_mode <small>optional</small></dt><dd><code>align</code> (default), <code>prompt</code>, or <code>correct</code>.</dd>
-                  <dt>language <small>optional</small></dt><dd>Two-letter ISO 639-1 code, such as <code>vi</code> or <code>en</code>. Overrides the saved language for this job only. Omit or leave empty to use the endpoint default.</dd>
+                  <dt>language <small>optional</small></dt><dd>Two-letter ISO 639-1 code, such as <code>vi</code> or <code>en</code>. Omit or leave empty to auto-detect.</dd>
+                  <dt>NoVocals <small>optional</small></dt><dd><code>true</code> or <code>false</code> (default). Enable Copy no-vocals song for this request. When true, vocal separation and MP3 stems are enabled automatically at 320 kbps.</dd>
+                  <dt>VietLyricsFallback <small>optional</small></dt><dd><code>true</code> or <code>false</code>. Override Viet Lyrics fallback pass for this request; omit to use the saved endpoint setting. The pass runs only when the opening retry triggers.</dd>
                 </dl>
                 <h3>Download response</h3>
-                <p>{form.copy_no_vocals ? 'ZIP archive containing the embedded song and a [NoVocals] MP3 with embedded lyrics.' : 'The original uploaded song with the completed transcription embedded as USLT and synchronized SYLT lyrics.'}</p>
+                <p>The uploaded song with embedded USLT and synchronized SYLT lyrics. With <code>NoVocals=true</code>, a ZIP containing that song and a <code>[NoVocals]</code> MP3 with embedded lyrics.</p>
                 <p>Uploads are isolated from your library and previous results. Temporary files are removed after download. Requests share the transcription queue; allow a long client timeout.</p>
                 <a href="/docs" target="_blank" rel="noreferrer">Open interactive API documentation ↗</a>
               </section>

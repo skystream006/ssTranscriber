@@ -68,17 +68,19 @@ class UploadAPITests(unittest.TestCase):
 
     def test_defaults_are_persistent_and_separate_from_job_settings(self):
         default = self.client.get('/api/endpoint-config').json()
-        for excluded in ('file', 'use_lyrics', 'lyrics_mode', 'save_previous_results'):
+        for excluded in ('file', 'use_lyrics', 'lyrics_mode', 'save_previous_results',
+                         'language', 'demucs_mp3', 'demucs_mp3_bitrate', 'copy_no_vocals'):
             self.assertNotIn(excluded, default)
-        saved = self.settings(language='en', vocal_separation=False, opening_threshold=7.5)
+        saved = self.settings(vocal_separation=False, opening_threshold=7.5)
         self.assertEqual(saved, json.loads((self.root / 'config.json').read_text()))
         self.assertEqual(saved, self.client.get('/api/endpoint-config').json())
         self.assertTrue(web_api.JobRequest().vocal_separation)
 
     def test_invalid_defaults_are_rejected_without_overwriting(self):
-        saved = self.settings(language='en')
+        saved = self.settings()
         for update in (
             {'copy_no_vocals': True}, {'backend': 'unknown'}, {'opening_threshold': -1},
+            {'language': 'en'}, {'demucs_mp3': True}, {'demucs_mp3_bitrate': 192},
             {'backend_options': {'NOT_AN_OPTION': True}},
             {'fallback_viet_lyrics_options': {'NOT_AN_OPTION': True}},
             {'save_previous_results': True}, {'lyrics_mode': 'prompt'},
@@ -87,6 +89,38 @@ class UploadAPITests(unittest.TestCase):
                 response = self.client.put('/api/endpoint-config', json={**saved, **update})
                 self.assertEqual(response.status_code, 422)
                 self.assertEqual(saved, self.client.get('/api/endpoint-config').json())
+
+    def test_legacy_defaults_load_without_request_specific_options(self):
+        saved = self.settings(vocal_separation=False, opening_threshold=7.5)
+        legacy = {**saved, 'language': 'vi', 'demucs_mp3': True,
+                  'demucs_mp3_bitrate': 192, 'copy_no_vocals': True}
+        (self.root / 'config.json').write_text(json.dumps(legacy))
+        self.assertEqual(self.client.get('/api/endpoint-config').json(), saved)
+        response = self.upload()
+        self.assertEqual(response.status_code, 200, response.text)
+        request = self.seen_jobs[-1].request
+        self.assertIsNone(request.language)
+        self.assertFalse(request.copy_no_vocals)
+        self.assertFalse(request.demucs_mp3)
+        self.assertFalse(request.vocal_separation)
+        self.assertEqual(self.settings(), saved)
+        self.assertEqual(json.loads((self.root / 'config.json').read_text()), saved)
+        self.assert_clean()
+
+    def test_invalid_saved_defaults_still_report_load_errors(self):
+        for invalid in ({'unknown': True}, {'opening_threshold': -1}, [], 'invalid'):
+            with self.subTest(invalid=invalid):
+                (self.root / 'config.json').write_text(json.dumps(invalid))
+                self.assertEqual(self.client.get('/api/endpoint-config').status_code, 500)
+
+    def test_local_job_no_vocals_validation_is_unchanged(self):
+        for settings in ({'copy_no_vocals': True},
+                         {'copy_no_vocals': True, 'demucs_mp3': True, 'vocal_separation': False}):
+            with self.subTest(settings=settings), self.assertRaises(ValueError):
+                web_api.JobRequest(**settings)
+        request = web_api.JobRequest(copy_no_vocals=True, demucs_mp3=True, language='vi')
+        self.assertTrue(request.copy_no_vocals)
+        self.assertEqual(request.language, 'vi')
 
     def test_known_lyrics_automatically_align_and_embed(self):
         response = self.upload(filename='Có Tất Cả.mp3', lyrics='Một khúc hát\nÊm đềm')
@@ -132,7 +166,7 @@ class UploadAPITests(unittest.TestCase):
                 self.assert_clean()
 
     def test_language_override_is_job_specific(self):
-        self.settings(language='vi')
+        saved = self.settings()
         response = self.upload(language='EN')
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(self.seen_jobs[-1].request.language, 'en')
@@ -140,18 +174,16 @@ class UploadAPITests(unittest.TestCase):
         self.assertEqual(tags.getall('USLT')[0].lang, 'eng')
         detail = self.client.get(f'/api/endpoint-jobs/{self.seen_jobs[-1].id}').json()
         self.assertEqual(detail['request']['language'], 'en')
-        self.assertEqual(self.client.get('/api/endpoint-config').json()['language'], 'vi')
+        self.assertEqual(self.client.get('/api/endpoint-config').json(), saved)
         self.assert_clean()
 
-    def test_omitted_or_empty_language_uses_saved_default(self):
-        for default in ('vi', None):
-            self.settings(language=default)
-            for data in ({}, {'language': ''}):
-                with self.subTest(default=default, data=data):
-                    response = self.upload(**data)
-                    self.assertEqual(response.status_code, 200, response.text)
-                    self.assertEqual(self.seen_jobs[-1].request.language, default)
-                    self.assert_clean()
+    def test_omitted_or_empty_language_uses_auto_detection(self):
+        for data in ({}, {'language': ''}):
+            with self.subTest(data=data):
+                response = self.upload(**data)
+                self.assertEqual(response.status_code, 200, response.text)
+                self.assertIsNone(self.seen_jobs[-1].request.language)
+                self.assert_clean()
 
     def test_invalid_language_format_is_rejected_before_processing(self):
         for language in ('English', 'en-US', 'e', '12', ' en ', 'auto'):
@@ -161,8 +193,7 @@ class UploadAPITests(unittest.TestCase):
         self.assertEqual(self.seen_jobs, [])
 
     def test_zip_contains_both_embedded_songs(self):
-        self.settings(copy_no_vocals=True, demucs_mp3=True)
-        response = self.upload(filename='My melody.mp3', lyrics='A gentle melody')
+        response = self.upload(filename='My melody.mp3', lyrics='A gentle melody', NoVocals='true')
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.headers['content-type'], 'application/zip')
         with zipfile.ZipFile(io.BytesIO(response.content)) as bundle:
@@ -173,9 +204,71 @@ class UploadAPITests(unittest.TestCase):
                 self.assertTrue(tags.getall('SYLT'))
         self.assert_clean()
 
+    def test_no_vocals_is_job_specific_and_enables_prerequisites(self):
+        for separate in (False, True):
+            saved = self.settings(vocal_separation=separate)
+            for data in ({'NoVocals': 'true'}, {'NoVocals': 'false'}, {}):
+                with self.subTest(separate=separate, data=data):
+                    enabled = data.get('NoVocals') == 'true'
+                    response = self.upload(**data)
+                    self.assertEqual(response.status_code, 200, response.text)
+                    self.assertEqual(response.headers['content-type'],
+                                     'application/zip' if enabled else 'application/octet-stream')
+                    request = self.seen_jobs[-1].request
+                    self.assertEqual(request.copy_no_vocals, enabled)
+                    self.assertEqual(request.demucs_mp3, enabled)
+                    self.assertEqual(request.vocal_separation, enabled or separate)
+                    self.assertEqual(request.demucs_mp3_bitrate, 320)
+                    detail = self.client.get(f'/api/endpoint-jobs/{self.seen_jobs[-1].id}').json()
+                    self.assertEqual(detail['request']['copy_no_vocals'], enabled)
+                    self.assertEqual(self.client.get('/api/endpoint-config').json(), saved)
+                    self.assert_clean()
+
+    def test_invalid_no_vocals_is_rejected_before_processing(self):
+        for value in ('invalid', '2'):
+            with self.subTest(value=value):
+                self.assertEqual(self.upload(NoVocals=value).status_code, 422)
+                self.assert_clean()
+        self.assertEqual(self.seen_jobs, [])
+
+    def test_viet_lyrics_fallback_override_is_job_specific(self):
+        for default in (False, True):
+            saved = self.settings(fallback_viet_lyrics=default)
+            for data in ({'VietLyricsFallback': 'true'}, {'VietLyricsFallback': 'false'}, {}):
+                with self.subTest(default=default, data=data):
+                    enabled = data['VietLyricsFallback'] == 'true' if data else default
+                    response = self.upload(**data)
+                    self.assertEqual(response.status_code, 200, response.text)
+                    request = self.seen_jobs[-1].request
+                    self.assertEqual(request.fallback_viet_lyrics, enabled)
+                    self.assertEqual('--fallback-viet-lyrics' in web_api.build_command(request), enabled)
+                    self.assertEqual(request.fallback_viet_lyrics_model, saved['fallback_viet_lyrics_model'])
+                    self.assertEqual(request.fallback_viet_lyrics_options, saved['fallback_viet_lyrics_options'])
+                    detail = self.client.get(f'/api/endpoint-jobs/{self.seen_jobs[-1].id}').json()
+                    self.assertEqual(detail['request']['fallback_viet_lyrics'], enabled)
+                    self.assertEqual(self.client.get('/api/endpoint-config').json(), saved)
+                    self.assert_clean()
+
+    def test_viet_lyrics_fallback_combines_with_no_vocals_and_language(self):
+        response = self.upload(VietLyricsFallback='true', NoVocals='true', language='EN')
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.headers['content-type'], 'application/zip')
+        request = self.seen_jobs[-1].request
+        self.assertTrue(request.fallback_viet_lyrics)
+        self.assertTrue(request.copy_no_vocals)
+        self.assertEqual(request.language, 'en')
+        self.assert_clean()
+
+    def test_invalid_viet_lyrics_fallback_is_rejected_before_processing(self):
+        for value in ('invalid', '2'):
+            with self.subTest(value=value):
+                self.assertEqual(self.upload(VietLyricsFallback=value).status_code, 422)
+                self.assert_clean()
+        self.assertEqual(self.seen_jobs, [])
+
     def test_missing_requested_accompaniment_is_an_error(self):
-        self.settings(copy_no_vocals=True, demucs_mp3=True, language='no-stems')
-        response = self.upload()
+        with patch.dict('os.environ', {'SSTRANSCRIBER_TEST_FAILURE': 'no-stems'}):
+            response = self.upload(NoVocals='true')
         self.assertEqual(response.status_code, 500)
         self.assertIn('no-vocals', response.json()['detail'])
         detail = self.client.get(f'/api/endpoint-jobs/{self.seen_jobs[-1].id}').json()
@@ -184,9 +277,9 @@ class UploadAPITests(unittest.TestCase):
         self.assert_clean()
 
     def test_pipeline_failures_never_return_unprocessed_audio(self):
-        for language in ('fail', 'empty', 'embed-fail'):
-            with self.subTest(language=language):
-                self.settings(language=language)
+        for failure in ('fail', 'empty', 'embed-fail'):
+            with self.subTest(failure=failure), \
+                    patch.dict('os.environ', {'SSTRANSCRIBER_TEST_FAILURE': failure}):
                 response = self.upload()
                 self.assertEqual(response.status_code, 500)
                 self.assertEqual(self.seen_jobs[-1].status, 'failed')
@@ -220,9 +313,16 @@ class UploadAPITests(unittest.TestCase):
         operation = schema['paths']['/api/transcribe']['post']
         self.assertIn('multipart/form-data', operation['requestBody']['content'])
         self.assertIn('application/zip', operation['responses']['200']['content'])
+        body_ref = operation['requestBody']['content']['multipart/form-data']['schema']['$ref']
+        body = schema['components']['schemas'][body_ref.rsplit('/', 1)[-1]]
+        self.assertEqual(body['properties']['NoVocals']['type'], 'boolean')
+        self.assertIs(body['properties']['NoVocals']['default'], False)
+        self.assertNotIn('NoVocals', body['required'])
+        self.assertIn({'type': 'boolean'}, body['properties']['VietLyricsFallback']['anyOf'])
+        self.assertNotIn('VietLyricsFallback', body['required'])
 
     def test_concurrent_uploads_queue_with_independent_settings_snapshots(self):
-        self.settings(language='en', vocal_separation=False)
+        self.settings(vocal_separation=False, opening_threshold=7.5)
 
         async def exercise():
             queued = asyncio.Event()
@@ -241,7 +341,7 @@ class UploadAPITests(unittest.TestCase):
                 with patch.object(web_api, 'run_job', observe_queue):
                     requests = [asyncio.create_task(client.post('/api/transcribe',
                                 files={'file': ('same.mp3', b'audio', 'audio/mpeg')},
-                                data={'lyrics': lyric})) for lyric in ('First melody', 'Second melody')]
+                                data={'lyrics': lyric, 'language': 'en'})) for lyric in ('First melody', 'Second melody')]
                     try:
                         await asyncio.wait_for(queued.wait(), timeout=10)
                         self.assertTrue(all(job.status == 'queued' and job.process is None for job in self.seen_jobs))
@@ -249,7 +349,7 @@ class UploadAPITests(unittest.TestCase):
                         self.assertEqual(len(listed), 2)
                         self.assertTrue(all(job['status'] == 'queued' and job['filename'] == 'same.mp3' for job in listed))
                         self.assertEqual((await client.get('/api/jobs')).json(), [])
-                        settings = web_api.EndpointSettings(language='vi', vocal_separation=False)
+                        settings = web_api.EndpointSettings(vocal_separation=True, opening_threshold=20)
                         saved = await client.put('/api/endpoint-config', json=settings.model_dump())
                         self.assertEqual(saved.status_code, 200)
                     finally:
@@ -259,6 +359,8 @@ class UploadAPITests(unittest.TestCase):
                     self.assertEqual(response.status_code, 200, response.text)
                     self.assertEqual(ID3(io.BytesIO(response.content)).getall('USLT')[0].text, lyric)
                 self.assertTrue(all(job.request.language == 'en' for job in self.seen_jobs))
+                self.assertTrue(all(not job.request.vocal_separation and job.request.opening_threshold == 7.5
+                                    for job in self.seen_jobs))
                 self.assertNotEqual(self.seen_jobs[0].work_dir, self.seen_jobs[1].work_dir)
                 self.assertLessEqual(self.seen_jobs[0].started_at, self.seen_jobs[1].started_at)
 

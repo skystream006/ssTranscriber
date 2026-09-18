@@ -138,15 +138,17 @@ mismatched PyTorch build — rerun with a different `--cuda` value.
 ### Upload transcription API
 
 Open **Endpoints** (`/endpoints`) to configure server-side defaults for upload requests.
-It includes the same **Recognition** and **Advanced** settings as Transcribe, including
-Demucs, the no-vocals copy, backend profiles, and the Viet Lyrics fallback. Settings are
+It includes **Recognition** and **Advanced** defaults for the backend, model, device,
+Demucs separation, backend profiles, and the Viet Lyrics fallback. Language and the
+**Store Demucs stem as MP3** section are request-specific rather than endpoint controls. Settings are
 saved in the git-ignored `.endpoint-config.json` and survive server restarts. They are
 independent of browser-saved Transcribe configurations. Archiving and Lyrics assist
-controls do not apply to uploads.
+controls do not apply to uploads. Existing saved configurations remain loadable; retired
+language, MP3 stem/bitrate, and no-vocals defaults are ignored and removed on the next save.
 
 - `GET /api/endpoint-config`: read the current defaults.
 - `PUT /api/endpoint-config`: save processing defaults as JSON. Unsupported fields,
-  unknown profile groups, and invalid no-vocals combinations are rejected.
+  including the retired request-specific defaults, and unknown profile groups are rejected.
 - `POST /api/transcribe`: upload `multipart/form-data` and wait for the finished download:
 
   | Field | Required | Meaning |
@@ -154,13 +156,15 @@ controls do not apply to uploads.
   | `file` | Yes | Song file in one of the supported audio formats. |
   | `lyrics` | No | Plain-text lyrics. Nonblank data automatically enables known lyrics; absent or blank data disables them. |
   | `lyrics_mode` | No | `align` (default), `prompt`, or `correct`. Ignored when no lyrics are supplied. |
-  | `language` | No | Two-letter ISO 639-1 language code such as `vi` or `en` (case-insensitive). Overrides the saved language for this job only. Omitted or empty uses the saved endpoint language, including auto-detection when that default is unset. |
+  | `language` | No | Two-letter ISO 639-1 language code such as `vi` or `en` (case-insensitive). Omitted or empty uses auto-detection. |
+  | `NoVocals` | No | `true` or `false` (default). Enables **Copy no-vocals song** for this request, automatically enabling vocal separation and MP3 stems at 320 kbps even if saved vocal separation is disabled. |
+  | `VietLyricsFallback` | No | `true` or `false`. Enables or disables **Viet Lyrics fallback pass** for this request only; omitted uses the saved endpoint setting. Uses the saved fallback model/profile and runs only when the opening retry triggers. |
 
 The response is the uploaded song with completed USLT/SYLT lyrics embedding and an
-attachment filename (`application/octet-stream`). If **Copy no-vocals song** is enabled,
+attachment filename (`application/octet-stream`). If `NoVocals=true`,
 the response is `application/zip`, containing the embedded song and
-`[NoVocals] <song stem>.mp3`, also with embedded lyrics. This option requires both vocal
-separation and MP3 stems. Missing requested accompaniment or a transcription/embedding
+`[NoVocals] <song stem>.mp3`, also with embedded lyrics. With `NoVocals=false` or omitted,
+saved vocal separation is respected and any stems use WAV. Missing requested accompaniment or a transcription/embedding
 failure returns an error, not an unprocessed song or partial download.
 
 Requests take a snapshot of saved defaults and share the one-at-a-time processing lock
@@ -510,4 +514,3 @@ error elsewhere, avoid loading a transformers-based backend in the same run/proc
 `faster-whisper`.
 Use `--backend faster-whisper` (default), `--backend pho-whisper`, or `--backend viet-lyrics`
 for Vietnamese lyrics.
-

@@ -177,15 +177,11 @@ def music_audio_path(library: str, relative_path: str):
     return path
 
 
-class ProcessingSettings(BaseModel):
+class SharedProcessingSettings(BaseModel):
     backend: str = 'faster-whisper'
     model: str = 'large-v3'
     device: str = 'auto'
-    language: str | None = None
     vocal_separation: bool = True
-    demucs_mp3: bool = False
-    demucs_mp3_bitrate: int = Field(default=320, ge=64, le=512)
-    copy_no_vocals: bool = False
     keep_promotions: bool = False
     opening_threshold: float = Field(default=1.0, ge=0, le=300)
     fallback_viet_lyrics: bool = False
@@ -200,6 +196,13 @@ class ProcessingSettings(BaseModel):
             raise ValueError('Unsupported backend')
         return value
 
+
+class ProcessingSettings(SharedProcessingSettings):
+    language: str | None = None
+    demucs_mp3: bool = False
+    demucs_mp3_bitrate: int = Field(default=320, ge=64, le=512)
+    copy_no_vocals: bool = False
+
     @model_validator(mode='after')
     def validate_no_vocals_copy(self):
         if self.copy_no_vocals and (not self.vocal_separation or not self.demucs_mp3):
@@ -207,9 +210,8 @@ class ProcessingSettings(BaseModel):
         return self
 
 
-class EndpointSettings(ProcessingSettings):
+class EndpointSettings(SharedProcessingSettings):
     model_config = {'extra': 'forbid'}
-    language: str | None = 'vi'
     opening_threshold: float = Field(default=20.0, ge=0, le=300)
 
 
@@ -512,7 +514,7 @@ def get_config():
     }
 
 
-def validate_processing_profiles(settings: ProcessingSettings):
+def validate_processing_profiles(settings: SharedProcessingSettings):
     validate_profile_options(settings.backend, settings.backend_options, 'backend')
     validate_profile_options('viet-lyrics', settings.fallback_viet_lyrics_options, 'fallback')
 
@@ -522,7 +524,12 @@ def get_endpoint_config():
     if not ENDPOINT_CONFIG_PATH.exists():
         return EndpointSettings()
     try:
-        settings = EndpointSettings.model_validate_json(ENDPOINT_CONFIG_PATH.read_text(encoding='utf-8'))
+        data = json.loads(ENDPOINT_CONFIG_PATH.read_text(encoding='utf-8'))
+        if isinstance(data, dict):
+            # Discard retired defaults from configurations saved before per-upload options.
+            for field in ('language', 'demucs_mp3', 'demucs_mp3_bitrate', 'copy_no_vocals'):
+                data.pop(field, None)
+        settings = EndpointSettings.model_validate(data)
         validate_processing_profiles(settings)
         return settings
     except (OSError, ValueError) as exc:
@@ -589,7 +596,15 @@ async def transcribe_upload(
     lyrics_mode: Literal['prompt', 'align', 'correct'] = Form('align'),
     language: str | None = Form(
         None, pattern=r'^[A-Za-z]{2}$',
-        description='Optional ISO 639-1 language code (e.g. vi, en). Overrides the saved language for this job only; omitted or empty uses the saved default.',
+        description='Optional ISO 639-1 language code (e.g. vi, en). Omitted or empty auto-detects the language.',
+    ),
+    no_vocals: bool = Form(
+        False, alias='NoVocals',
+        description='Return a ZIP with the embedded song and no-vocals MP3. Enables vocal separation and MP3 stems for this request.',
+    ),
+    viet_lyrics_fallback: bool | None = Form(
+        None, alias='VietLyricsFallback',
+        description='Enable or disable the Viet Lyrics fallback pass for this request. Omitted uses the saved endpoint setting; the pass runs only when the opening retry triggers.',
     ),
 ):
     """Wait for processing using saved endpoint defaults, then download the completed audio."""
@@ -605,10 +620,15 @@ async def transcribe_upload(
         validate_processing_profiles(settings)
         lyrics = lyrics.strip().lstrip('\ufeff').strip() if lyrics else None
         processing_options = settings.model_dump()
-        if language is not None:
-            processing_options['language'] = language.lower()
-        request = JobRequest(**processing_options, use_lyrics=bool(lyrics), lyrics_mode=lyrics_mode,
-                             save_previous_results=False)
+        if no_vocals:
+            processing_options['vocal_separation'] = True
+        if viet_lyrics_fallback is not None:
+            processing_options['fallback_viet_lyrics'] = viet_lyrics_fallback
+        request = JobRequest(
+            **processing_options, language=language.lower() if language else None,
+            demucs_mp3=no_vocals, copy_no_vocals=no_vocals,
+            use_lyrics=bool(lyrics), lyrics_mode=lyrics_mode, save_previous_results=False,
+        )
         TEMP_DIR.mkdir(parents=True, exist_ok=True)
         work_dir = Path(tempfile.mkdtemp(prefix='ss-transcriber-api-', dir=TEMP_DIR))
         song = await asyncio.to_thread(prepare_upload, work_dir, file.file, suffix, lyrics)
@@ -633,7 +653,7 @@ async def transcribe_upload(
             })
         job.logs.append('Preparing download response…')
         path, download_name, media_type = await asyncio.to_thread(
-            upload_result, work_dir, song, filename, settings.copy_no_vocals,
+            upload_result, work_dir, song, filename, request.copy_no_vocals,
         )
         if job.cancel_requested:
             job.status = 'cancelled'
