@@ -39,6 +39,7 @@ import {
 import MusicPlayer from './MusicPlayer'
 import Health from './Health'
 import EndpointJobs from './EndpointJobs'
+import useLogScroll from './useLogScroll'
 
 type BackendConfig = {
   models: string[]
@@ -337,7 +338,7 @@ export default function App() {
   const setBackendProfileText = isEndpoint ? setEndpointBackendProfileText : setRunBackendProfileText
   const fallbackProfileText = isEndpoint ? endpointFallbackProfileText : runFallbackProfileText
   const setFallbackProfileText = isEndpoint ? setEndpointFallbackProfileText : setRunFallbackProfileText
-  const logRef = useRef<HTMLPreElement>(null)
+  const logScroll = useLogScroll(selectedJob?.id, selectedJob?.logs)
   const themeMenuRef = useRef<HTMLDetailsElement>(null)
 
   useEffect(() => {
@@ -433,10 +434,6 @@ export default function App() {
     }, 1200)
     return () => window.clearInterval(timer)
   }, [selectedJob?.id, selectedJob?.status])
-
-  useEffect(() => {
-    if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight
-  }, [selectedJob?.logs])
 
   useEffect(() => {
     if (!consoleExpanded) return
@@ -681,7 +678,7 @@ export default function App() {
           </button>
         </div>
       </div>
-      <pre ref={logRef}>{selectedJob.logs?.length ? selectedJob.logs.join('\n') : 'Waiting for process output...'}</pre>
+      <pre {...logScroll}>{selectedJob.logs?.length ? selectedJob.logs.join('\n') : 'Waiting for process output...'}</pre>
     </div>
   ) : null
   const transcriptGroups = Object.entries(
