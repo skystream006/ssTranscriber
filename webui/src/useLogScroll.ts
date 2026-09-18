@@ -5,17 +5,26 @@ export default function useLogScroll(jobId: string | null | undefined, logs: str
   const elementRef = useRef<HTMLPreElement | null>(null)
   const following = useRef(true)
   const position = useRef(0)
-  const restoredPosition = useRef<number | null>(null)
+  const restoring = useRef(false)
+  const restoreFrame = useRef<number | null>(null)
   const previousJobId = useRef(jobId)
+
+  const restoreScroll = useCallback((element: HTMLPreElement, scrollTop: number) => {
+    restoring.current = true
+    if (restoreFrame.current !== null) cancelAnimationFrame(restoreFrame.current)
+    element.scrollTop = scrollTop
+    restoreFrame.current = requestAnimationFrame(() => {
+      restoring.current = false
+      restoreFrame.current = null
+    })
+  }, [])
 
   const ref = useCallback((element: HTMLPreElement | null) => {
     elementRef.current = element
-    restoredPosition.current = null
     if (element) {
-      element.scrollTop = following.current ? element.scrollHeight : position.current
-      restoredPosition.current = element.scrollTop
+      restoreScroll(element, following.current ? element.scrollHeight : position.current)
     }
-  }, [])
+  }, [restoreScroll])
 
   useLayoutEffect(() => {
     if (previousJobId.current !== jobId) {
@@ -25,15 +34,17 @@ export default function useLogScroll(jobId: string | null | undefined, logs: str
     }
     const element = elementRef.current
     if (element && following.current) {
-      element.scrollTop = element.scrollHeight
+      restoreScroll(element, element.scrollHeight)
     }
-  }, [jobId, logs])
+  }, [jobId, logs, restoreScroll])
+
+  useLayoutEffect(() => () => {
+    if (restoreFrame.current !== null) cancelAnimationFrame(restoreFrame.current)
+  }, [])
 
   const onScroll = useCallback((event: UIEvent<HTMLPreElement>) => {
+    if (restoring.current) return
     const element = event.currentTarget
-    // Expanding can clamp a restored position to the bottom without user input.
-    if (element.scrollTop === restoredPosition.current) return
-    restoredPosition.current = null
     position.current = element.scrollTop
     // Allow for fractional scroll positions at the bottom.
     following.current = element.scrollHeight - element.clientHeight - element.scrollTop <= 2

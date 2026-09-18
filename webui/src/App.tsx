@@ -121,7 +121,7 @@ const defaultForm: JobRequest = {
   backend: 'faster-whisper',
   model: 'large-v3',
   device: 'auto',
-  language: 'vi',
+  language: null,
   vocal_separation: true,
   demucs_mp3: false,
   demucs_mp3_bitrate: 320,
@@ -138,6 +138,38 @@ const defaultForm: JobRequest = {
 }
 
 const terminalStatuses: JobStatus[] = ['completed', 'failed', 'cancelled']
+const isoLanguageCodes = [
+  'aa', 'ab', 'ae', 'af', 'ak', 'am', 'an', 'ar', 'as', 'av', 'ay', 'az',
+  'ba', 'be', 'bg', 'bh', 'bi', 'bm', 'bn', 'bo', 'br', 'bs',
+  'ca', 'ce', 'ch', 'co', 'cr', 'cs', 'cu', 'cv', 'cy',
+  'da', 'de', 'dv', 'dz',
+  'ee', 'el', 'en', 'eo', 'es', 'et', 'eu',
+  'fa', 'ff', 'fi', 'fj', 'fo', 'fr', 'fy',
+  'ga', 'gd', 'gl', 'gn', 'gu', 'gv',
+  'ha', 'he', 'hi', 'ho', 'hr', 'ht', 'hu', 'hy', 'hz',
+  'ia', 'id', 'ie', 'ig', 'ii', 'ik', 'io', 'is', 'it', 'iu',
+  'ja', 'jv',
+  'ka', 'kg', 'ki', 'kj', 'kk', 'kl', 'km', 'kn', 'ko', 'kr', 'ks', 'ku', 'kv', 'kw', 'ky',
+  'la', 'lb', 'lg', 'li', 'ln', 'lo', 'lt', 'lu', 'lv',
+  'mg', 'mh', 'mi', 'mk', 'ml', 'mn', 'mr', 'ms', 'mt', 'my',
+  'na', 'nb', 'nd', 'ne', 'ng', 'nl', 'nn', 'no', 'nr', 'nv', 'ny',
+  'oc', 'oj', 'om', 'or', 'os',
+  'pa', 'pi', 'pl', 'ps', 'pt',
+  'qu',
+  'rm', 'rn', 'ro', 'ru', 'rw',
+  'sa', 'sc', 'sd', 'se', 'sg', 'si', 'sk', 'sl', 'sm', 'sn', 'so', 'sq', 'sr', 'ss', 'st', 'su', 'sv', 'sw',
+  'ta', 'te', 'tg', 'th', 'ti', 'tk', 'tl', 'tn', 'to', 'tr', 'ts', 'tt', 'tw', 'ty',
+  'ug', 'uk', 'ur', 'uz',
+  've', 'vi', 'vo',
+  'wa', 'wo',
+  'xh',
+  'yi', 'yo',
+  'za', 'zh', 'zu',
+] as const
+const languageDisplayNames = new Intl.DisplayNames(undefined, { type: 'language' })
+const languageOptions = isoLanguageCodes
+  .map((code) => ({ code, label: languageDisplayNames.of(code) ?? code.toUpperCase() }))
+  .sort((left, right) => left.label.localeCompare(right.label))
 const themeOptions: { value: Theme; label: string; colors: [string, string] }[] = [
   { value: 'light', label: 'Light', colors: ['#fafaf6', '#17634f'] },
   { value: 'dark', label: 'Dark', colors: ['#202623', '#79c5a7'] },
@@ -852,8 +884,11 @@ export default function App() {
                     </select>
                   </label>
                   <label className="field">
-                    <FieldLabel info="Enter an ISO language code such as vi or en to force recognition, or leave it empty for automatic language detection.">Language</FieldLabel>
-                    <input value={form.language ?? ''} placeholder="Auto" maxLength={12} onChange={(event) => update('language', event.target.value || null)} />
+                    <FieldLabel info="Select an ISO 639-1 language to force recognition, or use Auto-detect to identify it from the audio.">Language</FieldLabel>
+                    <select value={form.language ?? ''} onChange={(event) => update('language', event.target.value || null)}>
+                      <option value="">Auto-detect</option>
+                      {languageOptions.map(({ code, label }) => <option key={code} value={code}>{label} ({code})</option>)}
+                    </select>
                   </label>
                   <label className="field">
                     <FieldLabel info="If separated-vocal transcription starts later than this many seconds, retry the original mix to recover a potentially clipped opening.">Opening threshold</FieldLabel>

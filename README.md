@@ -39,7 +39,7 @@ Requires working Docker Desktop/WSL2 GPU passthrough and an NVIDIA driver suppor
 CUDA 12.8.
 
 ```powershell
-docker compose -f compose.yaml -f compose.gpu.yaml up --build -d
+docker compose -f compose.yaml -f compose.gpu.yaml up --build -dgit
 ```
 
 Open http://127.0.0.1:8767. For CPU jobs, select **CPU** in the UI; for GPU jobs,

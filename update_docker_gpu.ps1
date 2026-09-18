@@ -1,0 +1,1 @@
+git pull && docker compose -f compose.yaml -f compose.gpu.yaml up --build -d

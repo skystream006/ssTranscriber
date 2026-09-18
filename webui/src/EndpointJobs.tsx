@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { Ban, CircleCheck, CircleX, Clock3, Cpu, FileAudio, Gauge, LoaderCircle, RefreshCw, TerminalSquare } from 'lucide-react'
+import { createPortal } from 'react-dom'
+import { Ban, CircleCheck, CircleX, Clock3, Cpu, FileAudio, Gauge, LoaderCircle, Maximize2, Minimize2, RefreshCw, TerminalSquare } from 'lucide-react'
 import useLogScroll from './useLogScroll'
 
 type JobStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'
@@ -54,6 +55,7 @@ export default function EndpointJobs() {
   const [loaded, setLoaded] = useState(false)
   const [refresh, setRefresh] = useState(0)
   const [updatedAt, setUpdatedAt] = useState<string | null>(null)
+  const [logExpanded, setLogExpanded] = useState(false)
   const logScroll = useLogScroll(selectedId, detail?.logs)
 
   const select = (id: string) => {
@@ -124,9 +126,43 @@ export default function EndpointJobs() {
     }
   }, [refresh, filter])
 
+  useEffect(() => {
+    if (!logExpanded) return
+    const previousOverflow = document.body.style.overflow
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setLogExpanded(false)
+    }
+    document.body.style.overflow = 'hidden'
+    document.addEventListener('keydown', closeOnEscape)
+    return () => {
+      document.body.style.overflow = previousOverflow
+      document.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [logExpanded])
+
   const visibleJobs = jobs.filter((job) => filter === 'all' || active(job))
     .sort((a, b) => Number(active(b)) - Number(active(a)))
   const selected = detail?.id === selectedId ? detail : jobs.find((job) => job.id === selectedId)
+  const processingLog = selected ? (
+    <div className={`console ${logExpanded ? 'expanded' : ''}`}>
+      <div className="console-head">
+        <span><TerminalSquare /> Processing log</span>
+        <div className="console-actions">
+          <code>{selected.id}</code>
+          <button
+            type="button"
+            aria-label={logExpanded ? 'Exit full window' : 'Expand processing log'}
+            aria-pressed={logExpanded}
+            title={logExpanded ? 'Exit full window (Esc)' : 'Expand processing log'}
+            onClick={() => setLogExpanded((current) => !current)}
+          >
+            {logExpanded ? <Minimize2 /> : <Maximize2 />}
+          </button>
+        </div>
+      </div>
+      <pre {...logScroll} aria-label="Endpoint job processing log">{detail?.id === selected.id ? detail.logs?.join('\n') || 'Waiting for processing output…' : 'Loading log…'}</pre>
+    </div>
+  ) : null
 
   return (
     <div className="endpoint-jobs-workspace">
@@ -183,10 +219,7 @@ export default function EndpointJobs() {
               </dl>
               <p className="endpoint-job-note">{selected.status === 'queued' ? 'Waiting for the shared transcription queue.' : selected.status === 'completed' ? 'Processing finished and the download was prepared for the API caller.' : selected.status === 'failed' ? 'Processing failed. See the logs below for details.' : selected.status === 'cancelled' ? 'The upload request was cancelled.' : 'Processing audio or preparing the download. Logs update automatically.'}</p>
             </div>
-            <div className="console">
-              <div className="console-head"><span><TerminalSquare /> Processing log</span><span>{selected.id}</span></div>
-              <pre {...logScroll} aria-label="Endpoint job processing log">{detail?.id === selected.id ? detail.logs?.join('\n') || 'Waiting for processing output…' : 'Loading log…'}</pre>
-            </div>
+            {logExpanded ? createPortal(processingLog, document.body) : processingLog}
           </> : <div className="empty-state"><TerminalSquare /><h3>Monitor an API request</h3><p>Select a job to view its settings, timestamps, and live processing log. Downloads are sent to the original API caller.</p></div>}
         </section>
       </div>
