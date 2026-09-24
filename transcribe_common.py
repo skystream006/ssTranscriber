@@ -440,9 +440,24 @@ def archive_demucs_results():
         suffix += 1
 
 
+def ensure_ffmpeg_available():
+    if shutil.which('ffmpeg') and shutil.which('ffprobe'):
+        return
+    try:
+        import static_ffmpeg
+    except ImportError as exc:
+        raise RuntimeError(
+            'FFmpeg is not available. Run _install_audio_tools.py to install it.'
+        ) from exc
+    static_ffmpeg.add_paths(weak=True)
+    if not shutil.which('ffmpeg') or not shutil.which('ffprobe'):
+        raise RuntimeError('FFmpeg installation completed, but its executables are unavailable.')
+
+
 def separate_vocals(path: Path, device: str, output_root: Path, use_mp3=False, mp3_bitrate=320):
     separation_start = datetime.now()
     log_progress(f'{path.name} — Demucs vocal separation started')
+    ensure_ffmpeg_available()
     command = [
         sys.executable,
         '-m',
@@ -615,6 +630,32 @@ def load_transformers_asr_pipeline(model_name: str, device: str, label: str):
         ) from exc
 
 
+def _split_capitalized_phrases(text):
+    boundaries = [0]
+    has_lowercase = False
+    for index, character in enumerate(text):
+        next_character = text[index + 1] if index + 1 < len(text) else ''
+        starts_capitalized_word = (
+            character.isupper()
+            and has_lowercase
+            and (
+                text[index - 1].isspace()
+                or next_character.islower()
+            )
+        )
+        if starts_capitalized_word:
+            boundaries.append(index)
+            has_lowercase = False
+        elif character.islower():
+            has_lowercase = True
+    boundaries.append(len(text))
+    return [
+        text[start:end].strip()
+        for start, end in zip(boundaries, boundaries[1:])
+        if text[start:end].strip()
+    ]
+
+
 def run_transformers_pipeline_transcription(
     model,
     path: Path,
@@ -628,6 +669,7 @@ def run_transformers_pipeline_transcription(
     max_words_per_line=14,
     max_line_duration=12.0,
     generation_kwargs=None,
+    split_on_capitalized_phrases=False,
 ):
     # Shared chunked-ASR-pipeline transcription logic (pho-whisper, viet-lyrics).
     # Uses word-level timestamps rather than one timestamp per 30s chunk,
@@ -654,6 +696,30 @@ def run_transformers_pipeline_transcription(
     result = model(str(path), **kwargs)
 
     words = []
+
+    def append_timed_text(text, start, end):
+        phrases = (
+            _split_capitalized_phrases(text)
+            if split_on_capitalized_phrases
+            else [text]
+        )
+        total_characters = sum(len(phrase) for phrase in phrases)
+        phrase_start = start
+        for index, phrase in enumerate(phrases):
+            if index == len(phrases) - 1 or end <= start:
+                phrase_end = end
+            else:
+                phrase_end = phrase_start + (
+                    (end - start) * len(phrase) / max(total_characters, 1)
+                )
+            starts_new_sentence = (
+                split_on_capitalized_phrases
+                and bool(words)
+                and next((character for character in phrase if character.isalpha()), '').isupper()
+            )
+            words.append((phrase, phrase_start, phrase_end, starts_new_sentence))
+            phrase_start = phrase_end
+
     if isinstance(result, dict):
         chunks = result.get('chunks') or []
         for chunk in chunks:
@@ -663,11 +729,11 @@ def run_transformers_pipeline_transcription(
             ts = chunk.get('timestamp') or (0.0, 0.0)
             start = float(ts[0]) if ts[0] is not None else 0.0
             end = float(ts[1]) if ts[1] is not None else start
-            words.append((text, start, end))
+            append_timed_text(text, start, end)
         if not words:
             text = (result.get('text') or '').strip()
             if text:
-                words.append((text, 0.0, 0.0))
+                append_timed_text(text, 0.0, 0.0)
     elif isinstance(result, list):
         for item in result:
             if isinstance(item, dict):
@@ -677,19 +743,20 @@ def run_transformers_pipeline_transcription(
                 ts = item.get('timestamp') or (0.0, 0.0)
                 start = float(ts[0]) if ts[0] is not None else 0.0
                 end = float(ts[1]) if ts[1] is not None else start
-                words.append((text, start, end))
+                append_timed_text(text, start, end)
     elif isinstance(result, str):
         text = result.strip()
         if text:
-            words.append((text, 0.0, 0.0))
+            append_timed_text(text, 0.0, 0.0)
 
     segments = []
     line_words = []
     line_start = None
     previous_end = None
-    for text, start, end in words:
+    for text, start, end, starts_new_sentence in words:
         if line_words and (
-            (previous_end is not None and start - previous_end > line_pause_threshold)
+            starts_new_sentence
+            or (previous_end is not None and start - previous_end > line_pause_threshold)
             or len(line_words) >= max_words_per_line
             or (line_start is not None and end - line_start > max_line_duration)
         ):
@@ -716,4 +783,3 @@ def run_transformers_pipeline_transcription(
         if last_reported < 100:
             log_progress(f'{label} — transcription 100%')
     return segments, info
-

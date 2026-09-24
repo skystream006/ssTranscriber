@@ -75,4 +75,5 @@ def transcribe(model, path, language, label: str, lyrics_text=None):
         max_words_per_line=MAX_WORDS_PER_LINE,
         max_line_duration=MAX_LINE_DURATION,
         generation_kwargs=GENERATION_KWARGS,
+        split_on_capitalized_phrases=True,
     )

@@ -128,11 +128,29 @@ commands = [
         'command': [
             sys.executable, '-m', 'pip', 'install', '--upgrade',
             'demucs', 'faster-whisper', 'transformers', 'sentencepiece', 'mutagen', 'huggingface_hub',
-            'accelerate', 'librosa', 'soundfile',
+            'accelerate', 'librosa', 'soundfile', 'static-ffmpeg',
             'nvidia-cublas-cu12==12.8.4.1', 'nvidia-cudnn-cu12==9.10.2.21',
         ],
         'required': True,
         'name': 'install audio dependencies',
+    },
+    {
+        'command': [
+            sys.executable, '-c',
+            (
+                'import shutil, subprocess;'
+                'import static_ffmpeg;'
+                'static_ffmpeg.add_paths(weak=True);'
+                'ffmpeg=shutil.which("ffmpeg");'
+                'ffprobe=shutil.which("ffprobe");'
+                'assert ffmpeg and ffprobe, "FFmpeg executables were not installed";'
+                'print("ffmpeg", ffmpeg);'
+                'print("ffprobe", ffprobe);'
+                'subprocess.run([ffmpeg, "-version"], check=True)'
+            ),
+        ],
+        'required': True,
+        'name': 'install and verify FFmpeg',
     },
 ]
 if args.with_phowhisper:

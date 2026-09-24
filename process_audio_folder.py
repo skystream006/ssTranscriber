@@ -401,7 +401,7 @@ def main():
                 write_transcript_file(transcript_path, initial_language, initial_transcript_output)
                 # Keep the first pass's own result in a dedicated sibling file too, so a
                 # later retry overwriting the main transcript never loses it entirely.
-                initial_relative = path.relative_to(ROOT).with_name(f'{path.stem}_1initial.txttxt')
+                initial_relative = path.relative_to(ROOT).with_name(f'{path.stem}_1initial.txt')
                 initial_transcript_path = TRANSCRIPTS_DIR / initial_relative
                 write_transcript_file(initial_transcript_path, initial_language, initial_transcript_output)
             if (
@@ -457,7 +457,7 @@ def main():
                         )
                         retry_language = id3_language(args.language or info.language)
                         write_transcript_file(transcript_path, retry_language, retry_transcript_output)
-                        original_relative = path.relative_to(ROOT).with_name(f'{path.stem}_2original.txttxt')
+                        original_relative = path.relative_to(ROOT).with_name(f'{path.stem}_2original.txt')
                         original_transcript_path = TRANSCRIPTS_DIR / original_relative
                         write_transcript_file(original_transcript_path, retry_language, retry_transcript_output)
                 except Exception as original_retry_error:
@@ -578,8 +578,8 @@ def main():
 
             if used_original_fallback and args.fallback_viet_lyrics:
                 # The original-audio retry's own result was already saved as
-                # "_2original.txttxt" above; this is the viet-lyrics fallback's result.
-                fallback_relative = path.relative_to(ROOT).with_name(f'{path.stem}_3fallback.txttxt')
+                # "_2original.txt" above; this is the viet-lyrics fallback's result.
+                fallback_relative = path.relative_to(ROOT).with_name(f'{path.stem}_3fallback.txt')
                 fallback_transcript_path = TRANSCRIPTS_DIR / fallback_relative
                 write_transcript_file(fallback_transcript_path, language, transcript_output)
                 log_progress(f'{path.name} — wrote viet-lyrics fallback transcript: {fallback_transcript_path.name}')

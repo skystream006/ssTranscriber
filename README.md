@@ -70,7 +70,7 @@ Stopping retains your data and cached models. Source audio goes in `docker-data/
 ## Requirements
 
 - Python 3.9+
-- [FFmpeg](https://ffmpeg.org/) on `PATH`
+- [FFmpeg](https://ffmpeg.org/) (installed automatically by `_install_audio_tools.py`)
 - Optional: an NVIDIA GPU with a matching CUDA driver for faster transcription
 
 Python 3.13 users must select `cu124`, `cu126`, `cu130`, or `cpu`; PyTorch does not publish Python 3.13
@@ -114,10 +114,12 @@ python .\_install_audio_tools.py --cuda cu124 --with-viet-lyrics --viet-lyrics-m
 ```
 
 `_install_audio_tools.py` installs `torch`, `torchaudio`, `torchvision`, `demucs`, `faster-whisper`,
-`transformers`, `accelerate`, `librosa`, `soundfile`, and `mutagen`, then prints whether CUDA is
-visible. `torch`/`torchaudio`/`torchvision` are always installed together from the same CUDA
-index so they stay version-matched — a mismatched `torchvision` build (e.g. left over from an
-earlier `torch` upgrade) causes `transformers.pipeline(...)` to fail with
+`transformers`, `accelerate`, `librosa`, `soundfile`, `mutagen`, and a bundled FFmpeg build, then
+prints whether CUDA is visible. An existing FFmpeg installation on `PATH` is retained; otherwise,
+the bundled executable is downloaded and used automatically. `torch`/`torchaudio`/`torchvision`
+are always installed together from the same CUDA index so they stay version-matched — a
+mismatched `torchvision` build (e.g. left over from an earlier `torch` upgrade) causes
+`transformers.pipeline(...)` to fail with
 `RuntimeError: operator torchvision::nms does not exist` when loading the `pho-whisper` backend.
 On Windows, the installer also provides CUDA 12.8 cuBLAS and cuDNN 9 runtime DLLs required by
 Faster-Whisper's CTranslate2 backend, including on RTX 50-series GPUs using PyTorch `cu130`.
@@ -388,9 +390,9 @@ Supported extensions: `.mp3`, `.wav`, `.flac`, `.m4a`, `.aac`, `.ogg`, `.opus`, 
   `.txt` file always matches what is written into the audio file and can be used to re-embed SYLT
   lyrics later if needed.
 - If Demucs misses the opening and the script falls back to the original mix, a sibling file with
-  the suffix `_1initial.txttxt` preserves the initial separated-vocals result and `_2original.txttxt`
+  the suffix `_1initial.txt` preserves the initial separated-vocals result and `_2original.txt`
   contains the original-mix retry. When `--fallback-viet-lyrics` is also used, a third sibling
-  `_3fallback.txttxt` is created with the viet-lyrics pass's result, so all passes stay individually
+  `_3fallback.txt` is created with the viet-lyrics pass's result, so all passes stay individually
   inspectable instead of consecutive retries overwriting earlier transcripts.
 - The fallback triggers when the first usable vocal segment starts later than `--opening-threshold` seconds (default `1.0`), forcing the script to expect transcription to begin almost immediately (0:01) instead of tolerating a longer gap. Raise this value if Demucs-separated vocals legitimately start later in your songs.
 - When the fallback triggers, the script always retries first with the primary `--backend`/`--model`
@@ -438,7 +440,7 @@ For each audio file under `input/`, it looks for a transcript with the same rela
 path/filename (stem) under `output/transcripts/`, parses its `[lang:xx]` header and
 `[mm:ss.xx]text` synced lines (written by `process_audio_folder.py`), and embeds them as
 `USLT`/`SYLT` — tagging files **in place** and replacing any existing `USLT`/`SYLT` frames. The
-`_1initial.txttxt`/`_2original.txttxt`/`_3fallback.txttxt` pass-specific sibling files never match an audio
+`_1initial.txt`/`_2original.txt`/`_3fallback.txt` pass-specific sibling files never match an audio
 filename, so they're skipped automatically. Options:
 
 | Flag | Values | Default | Description |
