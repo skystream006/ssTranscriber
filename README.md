@@ -348,6 +348,7 @@ python .\process_audio_folder.py --device cuda:0 --backend viet-lyrics --model k
 | --- | --- | --- | --- |
 | `--device` | `auto`, `cpu`, `cuda:N` | prompt (`auto` if non-interactive) | Processing device. Detected devices are listed before work starts. |
 | `--language` | ISO 639-1 code (`vi`, `zh`, `ja`, …) | auto-detect | Forces the transcription language. |
+| `--multilingual` / `--no-multilingual` | flag | backend profile (`false`) | For Faster-Whisper, enables or disables language detection and decoding on every segment. |
 | `--backend` | `faster-whisper`, `pho-whisper`, `parakeet`, `sensevoice`, `viet-lyrics` | `faster-whisper` | Selects the transcription backend. |
 | `--model` | backend-specific model name | `large-v3` | Selects the model for the chosen backend. |
 | `--no-vocal-separation` | flag | off | Bypasses Demucs and transcribes the original audio. |

@@ -162,6 +162,15 @@ def main():
         help='Force a transcription language (ISO 639-1, e.g. vi, zh, ja). Auto-detected when omitted.',
     )
     parser.add_argument(
+        '--multilingual',
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            'For faster-whisper, detect and decode language changes in every segment. '
+            'Use --no-multilingual to disable it explicitly.'
+        ),
+    )
+    parser.add_argument(
         '--backend',
         choices=backends.BACKEND_CHOICES,
         default='faster-whisper',
@@ -287,11 +296,19 @@ def main():
         parser.error('--fallback-viet-lyrics-options-json must contain a JSON object.')
     if args.copy_no_vocals and (not args.demucs_mp3 or args.no_vocal_separation):
         parser.error('--copy-no-vocals requires --demucs-mp3 and vocal separation')
+    if args.multilingual is not None and args.backend != 'faster-whisper':
+        parser.error('--multilingual/--no-multilingual is only supported by faster-whisper')
+    backend_options = args.backend_options_json
+    if args.multilingual is not None:
+        backend_options = dict(backend_options)
+        transcribe_options = dict(backend_options.get('TRANSCRIBE_KWARGS', {}))
+        transcribe_options['multilingual'] = args.multilingual
+        backend_options['TRANSCRIBE_KWARGS'] = transcribe_options
     try:
         fallback_options = backends.resolve_options(
             'viet-lyrics', args.fallback_viet_lyrics_options_json
         )
-        backends.apply_options(args.backend, args.backend_options_json)
+        backends.apply_options(args.backend, backend_options)
     except ValueError as options_error:
         parser.error(str(options_error))
 

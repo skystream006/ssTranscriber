@@ -122,6 +122,15 @@ class UploadAPITests(unittest.TestCase):
         self.assertTrue(request.copy_no_vocals)
         self.assertEqual(request.language, 'vi')
 
+    def test_multilingual_is_faster_whisper_only_and_reaches_cli(self):
+        enabled = web_api.JobRequest(multilingual=True)
+        disabled = web_api.JobRequest(multilingual=False)
+
+        self.assertIn('--multilingual', web_api.build_command(enabled))
+        self.assertIn('--no-multilingual', web_api.build_command(disabled))
+        with self.assertRaises(ValueError):
+            web_api.JobRequest(backend='viet-lyrics', multilingual=True)
+
     def test_known_lyrics_automatically_align_and_embed(self):
         response = self.upload(filename='Có Tất Cả.mp3', lyrics='Một khúc hát\nÊm đềm')
         self.assertEqual(response.status_code, 200, response.text)
@@ -257,6 +266,36 @@ class UploadAPITests(unittest.TestCase):
         self.assertTrue(request.fallback_viet_lyrics)
         self.assertTrue(request.copy_no_vocals)
         self.assertEqual(request.language, 'en')
+        self.assert_clean()
+
+    def test_multilingual_upload_override_is_job_specific(self):
+        for default in (False, True):
+            saved = self.settings(multilingual=default)
+            for data in ({'Multilingual': 'true'}, {'Multilingual': 'false'}, {}):
+                with self.subTest(default=default, data=data):
+                    enabled = data['Multilingual'] == 'true' if data else default
+                    response = self.upload(**data)
+                    self.assertEqual(response.status_code, 200, response.text)
+                    request = self.seen_jobs[-1].request
+                    self.assertEqual(request.multilingual, enabled)
+                    self.assertEqual(
+                        '--multilingual' in web_api.build_command(request),
+                        enabled,
+                    )
+                    self.assertEqual(self.client.get('/api/endpoint-config').json(), saved)
+                    self.assert_clean()
+
+    def test_multilingual_upload_rejects_non_faster_whisper_backend(self):
+        self.settings(
+            backend='viet-lyrics',
+            model='kelvinbksoh/whisper-large-v2-vietnamese-lyrics-transcription',
+        )
+
+        response = self.upload(Multilingual='true')
+
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(response.json()['detail'], 'Multilingual is only supported by faster-whisper')
+        self.assertEqual(self.seen_jobs, [])
         self.assert_clean()
 
     def test_invalid_viet_lyrics_fallback_is_rejected_before_processing(self):

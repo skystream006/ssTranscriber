@@ -65,6 +65,7 @@ type JobRequest = {
   backend: string
   model: string
   device: string
+  multilingual: boolean
   language: string | null
   vocal_separation: boolean
   demucs_mp3: boolean
@@ -121,6 +122,7 @@ const defaultForm: JobRequest = {
   backend: 'faster-whisper',
   model: 'large-v3',
   device: 'auto',
+  multilingual: false,
   language: null,
   vocal_separation: true,
   demucs_mp3: false,
@@ -492,6 +494,7 @@ export default function App() {
       ...current,
       backend,
       model: backendConfig?.default_model ?? current.model,
+      multilingual: backend === 'faster-whisper' ? current.multilingual : false,
       fallback_viet_lyrics: backend === 'viet-lyrics' ? false : current.fallback_viet_lyrics,
     }))
   }
@@ -894,6 +897,14 @@ export default function App() {
                       {languageOptions.map(({ code, label }) => <option key={code} value={code}>{label} ({code})</option>)}
                     </select>
                   </label>}
+                  {form.backend === 'faster-whisper' && (
+                    <Toggle
+                      checked={form.multilingual}
+                      onChange={(value) => update('multilingual', value)}
+                      label="Multilingual detection"
+                      info="Detect and decode language changes in every audio segment. Leave Language on Auto-detect unless you want to set the initial language explicitly."
+                    />
+                  )}
                   <label className="field">
                     <FieldLabel info="If separated-vocal transcription starts later than this many seconds, retry the original mix to recover a potentially clipped opening.">Opening threshold</FieldLabel>
                     <div className="unit-input"><input type="number" min="0" max="300" step="0.5" value={form.opening_threshold} onChange={(event) => update('opening_threshold', Number(event.target.value))} /><span>sec</span></div>
@@ -999,6 +1010,7 @@ export default function App() {
                   <dt>lyrics <small>optional</small></dt><dd>Plain-text lyrics. Omit or leave blank to transcribe without known lyrics.</dd>
                   <dt>lyrics_mode <small>optional</small></dt><dd><code>align</code> (default), <code>prompt</code>, or <code>correct</code>.</dd>
                   <dt>language <small>optional</small></dt><dd>Two-letter ISO 639-1 code, such as <code>vi</code> or <code>en</code>. Omit or leave empty to auto-detect.</dd>
+                  <dt>Multilingual <small>optional</small></dt><dd><code>true</code> or <code>false</code>. Override per-segment Faster-Whisper language detection for this request; omit to use the saved endpoint setting.</dd>
                   <dt>NoVocals <small>optional</small></dt><dd><code>true</code> or <code>false</code> (default). Enable Copy no-vocals song for this request. When true, vocal separation and MP3 stems are enabled automatically at 320 kbps.</dd>
                   <dt>VietLyricsFallback <small>optional</small></dt><dd><code>true</code> or <code>false</code>. Override Viet Lyrics fallback pass for this request; omit to use the saved endpoint setting. The pass runs only when the opening retry triggers.</dd>
                 </dl>

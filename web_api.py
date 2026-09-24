@@ -181,6 +181,7 @@ class SharedProcessingSettings(BaseModel):
     backend: str = 'faster-whisper'
     model: str = 'large-v3'
     device: str = 'auto'
+    multilingual: bool = False
     vocal_separation: bool = True
     keep_promotions: bool = False
     opening_threshold: float = Field(default=1.0, ge=0, le=300)
@@ -195,6 +196,12 @@ class SharedProcessingSettings(BaseModel):
         if value not in BACKEND_FILES:
             raise ValueError('Unsupported backend')
         return value
+
+    @model_validator(mode='after')
+    def validate_multilingual_backend(self):
+        if self.multilingual and self.backend != 'faster-whisper':
+            raise ValueError('multilingual is only supported by faster-whisper')
+        return self
 
 
 class ProcessingSettings(SharedProcessingSettings):
@@ -292,6 +299,7 @@ def build_command(request: JobRequest):
         request.model,
         '--device',
         request.device,
+        '--multilingual' if request.multilingual else '--no-multilingual',
         '--lyrics-mode',
         request.lyrics_mode,
         '--embed-lyrics',
@@ -606,6 +614,10 @@ async def transcribe_upload(
         None, alias='VietLyricsFallback',
         description='Enable or disable the Viet Lyrics fallback pass for this request. Omitted uses the saved endpoint setting; the pass runs only when the opening retry triggers.',
     ),
+    multilingual: bool | None = Form(
+        None, alias='Multilingual',
+        description='Enable or disable per-segment language detection for Faster-Whisper. Omitted uses the saved endpoint setting.',
+    ),
 ):
     """Wait for processing using saved endpoint defaults, then download the completed audio."""
     work_dir = None
@@ -624,6 +636,13 @@ async def transcribe_upload(
             processing_options['vocal_separation'] = True
         if viet_lyrics_fallback is not None:
             processing_options['fallback_viet_lyrics'] = viet_lyrics_fallback
+        if multilingual is not None:
+            if multilingual and settings.backend != 'faster-whisper':
+                raise HTTPException(
+                    status_code=422,
+                    detail='Multilingual is only supported by faster-whisper',
+                )
+            processing_options['multilingual'] = multilingual
         request = JobRequest(
             **processing_options, language=language.lower() if language else None,
             demucs_mp3=no_vocals, copy_no_vocals=no_vocals,
@@ -844,7 +863,7 @@ def get_transcripts():
         if not folder.is_dir():
             continue
         for path in sorted(folder.rglob('*')):
-            if path.is_file() and path.suffix.lower() in {'.txt', '.txttxt', '.json'}:
+            if path.is_file() and path.suffix.lower() in {'.txt', '.json'}:
                 transcript_files.append({
                     'path': path.relative_to(OUTPUT_DIR).as_posix(),
                     'size': path.stat().st_size,
