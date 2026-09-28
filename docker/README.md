@@ -52,6 +52,41 @@ runtime with the primary backend but does **not** eliminate combined VRAM usage.
 Stop the CPU service with `docker compose down`; for GPU, add the two `-f` arguments.
 Do not run CPU and GPU variants simultaneously against the same storage/port.
 
+## Cached updates
+
+On Windows, update the GPU deployment from PowerShell:
+
+```powershell
+.\update_docker_gpu.ps1
+```
+
+The script pulls fast-forward-only, builds with cache progress visible, then starts
+the resulting image without building it again. A failed pull or build leaves the
+running container alone. It also refreshes WSL GPU driver library discovery after
+container recreation. To build local edits without pulling first:
+
+```powershell
+.\update_docker_gpu.ps1 -SkipPull
+```
+
+The Dockerfile separates frontend dependencies, Python build tools/dependencies,
+validated runtime dependencies, and application files. Compilers and Git stay in
+the Python builder; Node and npm stay in the frontend builder.
+
+| Change | Work on the next cached build |
+| --- | --- |
+| Web UI source/assets | Rebuild the frontend and copy application files; no pip/npm install or native dependency checks |
+| Python application/backend source | Copy changed application files; no dependency installs or native dependency checks |
+| Frontend package manifests | Rerun `npm ci` and build the frontend |
+| Python requirements/constraints or dependency stages | Rebuild affected Python dependency layers and rerun their checks |
+| Runtime verifier or runtime UID/GID | Rerun runtime setup/verification as needed |
+
+The first build after this stage-layout change installs dependencies once to seed
+the new cache. Keep Docker's build cache: `--no-cache`, builder pruning, changing
+builders, or changing a base image can force those installs again. Model downloads
+remain in the separate `model-cache` volume. Plain `docker compose up --build -d`
+(with the GPU override when needed) uses the same cached stages.
+
 ## Data and configuration
 
 Default mounts are deliberately separate from local-development audio:
@@ -162,10 +197,11 @@ For local tests, install `requirements-test.txt` into the existing virtual envir
 then run `python -m unittest discover -s tests -v`. It includes both HTTP test clients
 needed by the suite and current Starlette; it does not install audio runtimes.
 
-Every image build runs `pip check`, native-library imports, GPU-variant cuBLAS/cuDNN
-dynamic-linker discovery (before Torch imports), and actual WAV/MP3
-encoding/decoding without downloading models. The `test` target additionally runs
-the real CLI/API/ID3 tests with deterministic inference and separation substitutes:
+Dependency builds run `pip check`. The runtime dependency stage checks native-library
+imports, GPU-variant cuBLAS/cuDNN dynamic-linker discovery (before Torch imports),
+and actual WAV/MP3 encoding/decoding without downloading models or retaining build
+tools. Code-only builds reuse these verified layers. The `test` target additionally
+runs the real CLI/API/ID3 tests with deterministic inference and separation substitutes:
 
 ```sh
 docker build --target test --build-arg DEVICE=cpu -t sstranscriber:test .

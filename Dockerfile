@@ -2,10 +2,12 @@
 # Select cpu (default) or gpu with --build-arg DEVICE=gpu.
 ARG DEVICE=cpu
 
-FROM node:22-bookworm-slim AS frontend
+FROM node:22-bookworm-slim AS frontend-dependencies
 WORKDIR /build/webui
 COPY webui/package.json webui/package-lock.json ./
 RUN npm ci
+
+FROM frontend-dependencies AS frontend
 COPY webui/ ./
 RUN npm run build
 
@@ -19,40 +21,50 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     XDG_CACHE_HOME=/cache \
     NUMBA_CACHE_DIR=/cache/numba
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ffmpeg libsndfile1 libgomp1 ca-certificates build-essential git tini \
-    && rm -rf /var/lib/apt/lists/* \
-    && python -m pip install --no-cache-dir pip==25.3 setuptools==80.9.0 wheel==0.45.1
+        ffmpeg libsndfile1 libgomp1 ca-certificates tini \
+    && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY docker/constraints.txt /opt/constraints.txt
 ENV PIP_CONSTRAINT=/opt/constraints.txt
 
-FROM python-base AS cpu
+FROM python-base AS python-builder
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential git \
+    && rm -rf /var/lib/apt/lists/* \
+    && python -m pip install --no-cache-dir pip==25.3 setuptools==80.9.0 wheel==0.45.1
+
+FROM python-builder AS cpu-builder
 COPY docker/constraints-cpu.txt /opt/constraints-cpu.txt
-ENV PIP_CONSTRAINT=/opt/constraints-cpu.txt \
-    SSTRANSCRIBER_BUILD_DEVICE=cpu
+ENV PIP_CONSTRAINT=/opt/constraints-cpu.txt
 RUN python -m pip install --no-cache-dir \
     torch==2.8.0+cpu torchaudio==2.8.0+cpu torchvision==0.23.0+cpu \
     --index-url https://download.pytorch.org/whl/cpu
 
-FROM python-base AS gpu
+FROM python-builder AS gpu-builder
 # CUDA 12.8 wheels include the CUDA/cuDNN user-space libraries and Blackwell support.
 # The host supplies the NVIDIA driver via NVIDIA Container Toolkit / Docker Desktop.
 RUN python -m pip install --no-cache-dir \
     torch==2.8.0 torchaudio==2.8.0 torchvision==0.23.0 \
     --index-url https://download.pytorch.org/whl/cu128
+
+FROM ${DEVICE}-builder AS python-dependencies
+COPY requirements-webui.txt ./
+COPY docker/requirements-audio.txt /opt/requirements-audio.txt
+RUN python -m pip install --no-cache-dir -r requirements-webui.txt -r /opt/requirements-audio.txt \
+    && python -m pip check
+
+FROM python-base AS cpu
+COPY docker/constraints-cpu.txt /opt/constraints-cpu.txt
+ENV PIP_CONSTRAINT=/opt/constraints-cpu.txt \
+    SSTRANSCRIBER_BUILD_DEVICE=cpu
+
+FROM python-base AS gpu
 # CTranslate2 loads these libraries dynamically, independently of PyTorch.
 ENV LD_LIBRARY_PATH=/usr/local/lib/python3.11/site-packages/nvidia/cublas/lib:/usr/local/lib/python3.11/site-packages/nvidia/cudnn/lib \
     NVIDIA_VISIBLE_DEVICES=all \
     NVIDIA_DRIVER_CAPABILITIES=compute,utility
 
-FROM ${DEVICE} AS application
-COPY requirements-webui.txt ./
-COPY docker/requirements-audio.txt /opt/requirements-audio.txt
-RUN python -m pip install --no-cache-dir -r requirements-webui.txt -r /opt/requirements-audio.txt \
-    && python -m pip check
-COPY backends/ ./backends/
-COPY web_api.py transcribe_common.py process_audio_folder.py embed_lyrics.py clear_embedded_lyrics.py ./
-COPY --from=frontend /build/webui/dist ./webui/dist
+FROM ${DEVICE} AS runtime-dependencies
+COPY --from=python-dependencies /usr/local/ /usr/local/
 COPY docker/verify_runtime.py /opt/verify_runtime.py
 ARG APP_UID=1000
 ARG APP_GID=1000
@@ -62,6 +74,11 @@ RUN groupadd --gid ${APP_GID} app \
     && chown -R app:app /data /cache
 USER app
 RUN python /opt/verify_runtime.py
+
+FROM runtime-dependencies AS application
+COPY backends/ ./backends/
+COPY web_api.py transcribe_common.py process_audio_folder.py embed_lyrics.py clear_embedded_lyrics.py ./
+COPY --from=frontend /build/webui/dist ./webui/dist
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/ready', timeout=3).close()"
