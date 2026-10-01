@@ -14,9 +14,12 @@ import backends
 import transcribe_common
 
 failure = os.environ.get('SSTRANSCRIBER_TEST_FAILURE')
+separation_only = '--no-vocals-only' in sys.argv
 
 
 def transcribe(*args, **kwargs):
+    if separation_only:
+        raise AssertionError('Separation-only mode must not transcribe')
     if failure == 'fail':
         raise RuntimeError('Simulated recognition failure')
     segments = [] if failure == 'empty' else [SimpleNamespace(start=0.5, end=3.0, text='A gentle melody')]
@@ -31,7 +34,8 @@ def separate(path, device, output_root, use_mp3=False, mp3_bitrate=320):
     suffix = '.mp3' if use_mp3 else '.wav'
     vocals = destination / f'vocals{suffix}'
     vocals.write_bytes(b'isolated vocals')
-    (destination / f'no_vocals{suffix}').write_bytes(b'accompaniment')
+    if failure != 'missing-accompaniment':
+        (destination / f'no_vocals{suffix}').write_bytes(b'accompaniment')
     return vocals
 
 
@@ -39,6 +43,8 @@ original_embed = transcribe_common.write_lyrics_to_file
 
 
 def embed(*args, **kwargs):
+    if separation_only:
+        raise AssertionError('Separation-only mode must not rewrite lyrics')
     if failure == 'embed-fail':
         raise OSError('Simulated embedding failure')
     return original_embed(*args, **kwargs)
@@ -46,7 +52,8 @@ def embed(*args, **kwargs):
 
 with patch.multiple(backends, resolve_options=Mock(return_value={}), apply_options=Mock(return_value={}),
                     get_options=Mock(return_value={}), get_models=Mock(return_value=[]),
-                    load_model=Mock(return_value=object()), transcribe_audio=transcribe), \
+                    load_model=Mock(return_value=object(), side_effect=AssertionError('ASR loaded') if separation_only else None),
+                    transcribe_audio=transcribe), \
         patch.object(transcribe_common, 'separate_vocals', separate), \
         patch.object(transcribe_common, 'write_lyrics_to_file', embed):
     runpy.run_path(str(ROOT / 'process_audio_folder.py'), run_name='__main__')

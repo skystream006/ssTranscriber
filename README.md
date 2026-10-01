@@ -160,14 +160,21 @@ language, MP3 stem/bitrate, and no-vocals defaults are ignored and removed on th
   | `lyrics_mode` | No | `align` (default), `prompt`, or `correct`. Ignored when no lyrics are supplied. |
   | `language` | No | Two-letter ISO 639-1 language code such as `vi` or `en` (case-insensitive). Omitted or empty uses auto-detection. |
   | `NoVocals` | No | `true` or `false` (default). Enables **Copy no-vocals song** for this request, automatically enabling vocal separation and MP3 stems at 320 kbps even if saved vocal separation is disabled. |
+  | `NoVocalsOnly` | No | `true` or `false` (default). Runs Demucs only, skipping ASR model loading and transcription. Returns the unchanged original plus a no-vocals MP3 with copied ID3 metadata and existing embedded lyrics. Takes precedence over `NoVocals`; supplied lyrics and transcription options are ignored. |
   | `VietLyricsFallback` | No | `true` or `false`. Enables or disables **Viet Lyrics fallback pass** for this request only; omitted uses the saved endpoint setting. Uses the saved fallback model/profile and runs only when the opening retry triggers. |
 
 The response is the uploaded song with completed USLT/SYLT lyrics embedding and an
 attachment filename (`application/octet-stream`). If `NoVocals=true`,
 the response is `application/zip`, containing the embedded song and
-`[NoVocals] <song stem>.mp3`, also with embedded lyrics. With `NoVocals=false` or omitted,
+`[NoVocals] <song stem>.mp3`, also with embedded lyrics. With both `NoVocals` and `NoVocalsOnly` false or omitted,
 saved vocal separation is respected and any stems use WAV. Missing requested accompaniment or a transcription/embedding
 failure returns an error, not an unprocessed song or partial download.
+
+With `NoVocalsOnly=true`, the ZIP contains the byte-for-byte original and the separated
+MP3 at 320 kbps. Original USLT/SYLT lyrics, including their languages and timestamps,
+are copied without regeneration; if none exist, no lyrics are added. The no-vocals
+title is prefixed with `[NoVocals]`, falling back to the original filename stem when
+the title is missing or blank. Demucs failures or missing accompaniment return an error.
 
 Requests take a snapshot of saved defaults and share the one-at-a-time processing lock
 with Transcribe jobs. Allow a long HTTP timeout for queueing, model downloads, and

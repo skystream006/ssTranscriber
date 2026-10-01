@@ -111,7 +111,7 @@ def _load_lyrics_for_audio(audio_path: Path):
     return lyrics_text
 
 
-def _copy_no_vocals_song(source_audio: Path, vocals_path: Path, transcript, segments, language):
+def _copy_no_vocals_song(source_audio: Path, vocals_path: Path, transcript=None, segments=None, language='und'):
     no_vocals_source = vocals_path.with_name('no_vocals.mp3')
     if not no_vocals_source.is_file():
         return None
@@ -131,14 +131,46 @@ def _copy_no_vocals_song(source_audio: Path, vocals_path: Path, transcript, segm
         text=[f'[NoVocals] {text}' for text in (titles or [fallback_title])],
     ))
     source_tags.save(output_path, v2_version=3)
-    write_lyrics_to_file(
-        output_path,
-        transcript,
-        segments,
-        language,
-        uslt_source_path=source_audio,
-    )
+    if transcript is not None:
+        write_lyrics_to_file(
+            output_path,
+            transcript,
+            segments,
+            language,
+            uslt_source_path=source_audio,
+        )
     return output_path
+
+
+def _run_no_vocals_only(args, parser):
+    files = list(iter_audio_files(ROOT))
+    if args.file is not None:
+        requested_path = (ROOT / args.file).resolve()
+        if ROOT not in requested_path.parents or requested_path not in files:
+            parser.error('--file must name a supported audio file under input/.')
+        files = [requested_path]
+    device = resolve_device(args.device or 'auto')
+    LOG_PATH.write_text('', encoding='utf-8')
+    log_progress(f'Separation-only processing started on {device}; transcription disabled')
+    results = []
+    for path in files:
+        try:
+            vocals_path = separate_vocals(
+                path, device, TEMP_DIR, use_mp3=True,
+                mp3_bitrate=args.demucs_mp3_bitrate,
+            )
+            output_path = _copy_no_vocals_song(path, vocals_path)
+            if output_path is None:
+                raise RuntimeError('Demucs no-vocals MP3 was not produced')
+            status = 'Success (no-vocals song copied with original metadata and lyrics)'
+        except Exception as exc:
+            status = f'Failed: {exc}'
+        results.append({'file': path.name, 'status': status})
+        log_progress(f'{path.name}: {status}')
+    (TRANSCRIPTS_DIR.parent / 'processing_results.json').write_text(
+        json.dumps(results, ensure_ascii=False), encoding='utf-8',
+    )
+    return 1 if not results or any(result['status'].startswith('Failed') for result in results) else 0
 
 
 def _write_model_options(pass_number, pass_name, backend, model_name, device, language, options=None):
@@ -224,6 +256,11 @@ def main():
         help='MP3 bitrate (kbps) used when --demucs-mp3 is set. Default 320.',
     )
     parser.add_argument(
+        '--no-vocals-only',
+        action='store_true',
+        help='Run Demucs only and copy original metadata and embedded lyrics to the no-vocals MP3.',
+    )
+    parser.add_argument(
         '--copy-no-vocals',
         action='store_true',
         help='Copy the Demucs no-vocals MP3 to output/songs and embed the same lyrics as the source.',
@@ -305,6 +342,9 @@ def main():
         help='JSON object overriding the viet-lyrics fallback backend profile options.',
     )
     args = parser.parse_args()
+
+    if args.no_vocals_only:
+        return _run_no_vocals_only(args, parser)
 
     if not isinstance(args.backend_options_json, dict):
         parser.error('--backend-options-json must contain a JSON object.')

@@ -223,6 +223,7 @@ class EndpointSettings(SharedProcessingSettings):
 
 
 class JobRequest(ProcessingSettings):
+    no_vocals_only: bool = False
     file: str | None = None
     use_lyrics: bool = True
     lyrics_mode: Literal['prompt', 'align', 'correct'] = 'prompt'
@@ -289,6 +290,15 @@ def prune_endpoint_jobs():
 
 
 def build_command(request: JobRequest):
+    if request.no_vocals_only:
+        command = [
+            sys.executable, '-u', str(REPO_ROOT / 'process_audio_folder.py'),
+            '--no-vocals-only', '--device', request.device,
+            '--demucs-mp3-bitrate', str(request.demucs_mp3_bitrate),
+        ]
+        if request.file:
+            command.extend(['--file', request.file])
+        return command
     command = [
         sys.executable,
         '-u',
@@ -582,7 +592,7 @@ def upload_result(work_dir: Path, song: Path, filename: str, copy_no_vocals: boo
         raise HTTPException(status_code=500, detail='Processing did not produce a completion record')
     results = json.loads(manifest.read_text(encoding='utf-8'))
     if len(results) != 1 or not results[0]['status'].startswith('Success'):
-        raise HTTPException(status_code=500, detail='Song transcription or embedding failed')
+        raise HTTPException(status_code=500, detail='Song processing failed')
     if not copy_no_vocals:
         return song, filename, 'application/octet-stream'
     accompaniment = work_dir / 'output' / 'songs' / '[NoVocals] song.mp3'
@@ -611,6 +621,10 @@ async def transcribe_upload(
         False, alias='NoVocals',
         description='Return a ZIP with the embedded song and no-vocals MP3. Enables vocal separation and MP3 stems for this request.',
     ),
+    no_vocals_only: bool = Form(
+        False, alias='NoVocalsOnly',
+        description='Run Demucs without transcription and return a ZIP with the unchanged original and a no-vocals MP3 carrying its metadata and embedded lyrics. Overrides NoVocals; ignores transcription options and supplied lyrics.',
+    ),
     viet_lyrics_fallback: bool | None = Form(
         None, alias='VietLyricsFallback',
         description='Enable or disable the Viet Lyrics fallback pass for this request. Omitted uses the saved endpoint setting; the pass runs only when the opening retry triggers.',
@@ -630,14 +644,15 @@ async def transcribe_upload(
         if suffix not in SUPPORTED_AUDIO or any(ord(char) < 32 or char in '<>:"|?*' for char in filename):
             raise HTTPException(status_code=422, detail='File must have a supported audio filename')
         settings = await asyncio.to_thread(get_endpoint_config)
-        validate_processing_profiles(settings)
-        lyrics = lyrics.strip().lstrip('\ufeff').strip() if lyrics else None
+        if not no_vocals_only:
+            validate_processing_profiles(settings)
+        lyrics = lyrics.strip().lstrip('\ufeff').strip() if lyrics and not no_vocals_only else None
         processing_options = settings.model_dump()
-        if no_vocals:
+        if no_vocals or no_vocals_only:
             processing_options['vocal_separation'] = True
-        if viet_lyrics_fallback is not None:
+        if viet_lyrics_fallback is not None and not no_vocals_only:
             processing_options['fallback_viet_lyrics'] = viet_lyrics_fallback
-        if multilingual is not None:
+        if multilingual is not None and not no_vocals_only:
             if multilingual and settings.backend != 'faster-whisper':
                 raise HTTPException(
                     status_code=422,
@@ -646,7 +661,8 @@ async def transcribe_upload(
             processing_options['multilingual'] = multilingual
         request = JobRequest(
             **processing_options, language=language.lower() if language else None,
-            demucs_mp3=no_vocals, copy_no_vocals=no_vocals,
+            demucs_mp3=no_vocals or no_vocals_only, copy_no_vocals=no_vocals or no_vocals_only,
+            no_vocals_only=no_vocals_only,
             use_lyrics=bool(lyrics), lyrics_mode=lyrics_mode, save_previous_results=False,
         )
         TEMP_DIR.mkdir(parents=True, exist_ok=True)

@@ -273,6 +273,89 @@ class UploadAPITests(unittest.TestCase):
                     self.assertTrue(tags.getall('SYLT'))
                 self.assert_clean()
 
+    def test_no_vocals_only_preserves_original_and_embedded_lyrics(self):
+        saved = self.settings(vocal_separation=False, fallback_viet_lyrics=True)
+        original = io.BytesIO(b'original audio')
+        original_tags = ID3()
+        for frame in (
+            TIT2(encoding=1, text='Original title'),
+            TPE1(encoding=1, text='Original artist'),
+            APIC(encoding=1, mime='image/jpeg', type=3, desc='Cover', data=b'cover image'),
+            USLT(encoding=1, lang='vie', desc='Original lyrics', text='Original words'),
+            USLT(encoding=1, lang='eng', desc='Translation', text='Translated words'),
+            SYLT(encoding=1, lang='vie', desc='Original timing', format=2, type=1,
+                 text=[('Original words', 1250)]),
+        ):
+            original_tags.add(frame)
+        original_tags.save(original, v2_version=3)
+        content = original.getvalue()
+
+        response = self.upload(filename='My melody.mp3', content=content, NoVocalsOnly='true',
+                               NoVocals='false', lyrics='Do not use these words', language='EN')
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.headers['content-type'], 'application/zip')
+        with zipfile.ZipFile(io.BytesIO(response.content)) as bundle:
+            self.assertEqual(bundle.namelist(), ['My melody.mp3', '[NoVocals] My melody.mp3'])
+            self.assertEqual(bundle.read('My melody.mp3'), content)
+            instrumental = bundle.read('[NoVocals] My melody.mp3')
+            tags = ID3(io.BytesIO(instrumental))
+            self.assertEqual(tags['TIT2'].text, ['[NoVocals] Original title'])
+            for key in original_tags:
+                if key != 'TIT2':
+                    self.assertEqual(tags[key], original_tags[key])
+            self.assertTrue(instrumental.endswith(b'accompaniment'))
+        request = self.seen_jobs[-1].request
+        self.assertTrue(request.no_vocals_only)
+        self.assertTrue(request.vocal_separation)
+        self.assertTrue(request.demucs_mp3)
+        self.assertTrue(request.copy_no_vocals)
+        self.assertNotIn('--embed-lyrics', web_api.build_command(request))
+        self.assertEqual(self.client.get('/api/endpoint-config').json(), saved)
+        self.assert_clean()
+
+    def test_no_vocals_only_without_tags_does_not_generate_lyrics(self):
+        response = self.upload(filename='My melody.mp3', NoVocalsOnly='true')
+        self.assertEqual(response.status_code, 200, response.text)
+        with zipfile.ZipFile(io.BytesIO(response.content)) as bundle:
+            self.assertEqual(bundle.read('My melody.mp3'), b'original audio')
+            tags = ID3(io.BytesIO(bundle.read('[NoVocals] My melody.mp3')))
+            self.assertEqual(tags['TIT2'].text, ['[NoVocals] My melody'])
+            self.assertEqual(tags.getall('USLT'), [])
+            self.assertEqual(tags.getall('SYLT'), [])
+        self.assert_clean()
+
+    def test_no_vocals_only_separation_failure_is_an_error(self):
+        for failure in ('no-stems', 'missing-accompaniment'):
+            with self.subTest(failure=failure), \
+                    patch.dict('os.environ', {'SSTRANSCRIBER_TEST_FAILURE': failure}):
+                response = self.upload(NoVocalsOnly='true')
+                self.assertEqual(response.status_code, 500)
+                self.assertEqual(self.seen_jobs[-1].status, 'failed')
+                self.assertEqual(self.seen_jobs[-1].return_code, 1)
+                self.assert_clean()
+
+    def test_no_vocals_only_ignores_transcription_overrides(self):
+        self.settings(backend='viet-lyrics')
+        response = self.upload(NoVocalsOnly='true', NoVocals='true', Multilingual='true',
+                               VietLyricsFallback='true')
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.headers['content-type'], 'application/zip')
+        command = web_api.build_command(self.seen_jobs[-1].request)
+        self.assertIn('--no-vocals-only', command)
+        for flag in ('--backend', '--model', '--multilingual', '--fallback-viet-lyrics'):
+            self.assertNotIn(flag, command)
+        self.assert_clean()
+
+    def test_no_vocals_only_false_keeps_transcription_and_invalid_is_rejected(self):
+        response = self.upload(NoVocalsOnly='false')
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(ID3(io.BytesIO(response.content)).getall('USLT')[0].text, 'A gentle melody')
+        for value in ('invalid', '2'):
+            with self.subTest(value=value):
+                self.assertEqual(self.upload(NoVocalsOnly=value).status_code, 422)
+        self.assert_clean()
+
     def test_no_vocals_is_job_specific_and_enables_prerequisites(self):
         for separate in (False, True):
             saved = self.settings(vocal_separation=separate)
@@ -417,6 +500,9 @@ class UploadAPITests(unittest.TestCase):
         self.assertEqual(body['properties']['NoVocals']['type'], 'boolean')
         self.assertIs(body['properties']['NoVocals']['default'], False)
         self.assertNotIn('NoVocals', body['required'])
+        self.assertEqual(body['properties']['NoVocalsOnly']['type'], 'boolean')
+        self.assertIs(body['properties']['NoVocalsOnly']['default'], False)
+        self.assertNotIn('NoVocalsOnly', body['required'])
         self.assertIn({'type': 'boolean'}, body['properties']['VietLyricsFallback']['anyOf'])
         self.assertNotIn('VietLyricsFallback', body['required'])
 
