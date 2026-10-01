@@ -1012,10 +1012,12 @@ export default function App() {
                   <dt>language <small>optional</small></dt><dd>Two-letter ISO 639-1 code, such as <code>vi</code> or <code>en</code>. Omit or leave empty to auto-detect.</dd>
                   <dt>Multilingual <small>optional</small></dt><dd><code>true</code> or <code>false</code>. Override per-segment Faster-Whisper language detection for this request; omit to use the saved endpoint setting.</dd>
                   <dt>NoVocals <small>optional</small></dt><dd><code>true</code> or <code>false</code> (default). Enable Copy no-vocals song for this request. When true, vocal separation and MP3 stems are enabled automatically at 320 kbps.</dd>
+                  <dt>NoVocalsOnly <small>optional</small></dt><dd><code>true</code> or <code>false</code> (default). Run Demucs only, without loading an ASR model or transcribing. Overrides <code>NoVocals</code>; supplied lyrics and transcription options are ignored.</dd>
                   <dt>VietLyricsFallback <small>optional</small></dt><dd><code>true</code> or <code>false</code>. Override Viet Lyrics fallback pass for this request; omit to use the saved endpoint setting. The pass runs only when the opening retry triggers.</dd>
                 </dl>
                 <h3>Download response</h3>
                 <p>The uploaded song with embedded USLT and synchronized SYLT lyrics. With <code>NoVocals=true</code>, a ZIP containing that song and a <code>[NoVocals]</code> MP3 with embedded lyrics.</p>
+                <p>With <code>NoVocalsOnly=true</code>, a ZIP containing the unchanged original and a 320 kbps <code>[NoVocals]</code> MP3. Original ID3 metadata and embedded USLT/SYLT lyrics, including language and timing, are copied without generating new lyrics. The title is prefixed with <code>[NoVocals]</code>, using the original filename stem if the title is missing or blank.</p>
                 <p>Uploads are isolated from your library and previous results. Temporary files are removed after download. Requests share the transcription queue; allow a long client timeout.</p>
                 <a href="/docs" target="_blank" rel="noreferrer">Open interactive API documentation ↗</a>
               </section>
