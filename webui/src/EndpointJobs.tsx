@@ -23,6 +23,7 @@ type EndpointJob = {
     use_lyrics: boolean
     lyrics_mode: string
     copy_no_vocals: boolean
+    no_vocals_only: boolean
   }
 }
 
@@ -215,7 +216,7 @@ export default function EndpointJobs() {
                 <dt>Started</dt><dd>{timeLabel(selected.started_at)}</dd>
                 <dt>Finished</dt><dd>{timeLabel(selected.finished_at)}</dd>
                 <dt>Lyrics</dt><dd>{selected.request.use_lyrics ? selected.request.lyrics_mode : 'Automatic transcription'}</dd>
-                <dt>Response</dt><dd>{selected.request.copy_no_vocals ? 'ZIP · song + no-vocals song' : 'Embedded song'}</dd>
+                <dt>Response</dt><dd>{selected.request.no_vocals_only ? 'No-vocals song' : selected.request.copy_no_vocals ? 'ZIP · song + no-vocals song' : 'Embedded song'}</dd>
               </dl>
               <p className="endpoint-job-note">{selected.status === 'queued' ? 'Waiting for the shared transcription queue.' : selected.status === 'completed' ? 'Processing finished and the download was prepared for the API caller.' : selected.status === 'failed' ? 'Processing failed. See the logs below for details.' : selected.status === 'cancelled' ? 'The upload request was cancelled.' : 'Processing audio or preparing the download. Logs update automatically.'}</p>
             </div>

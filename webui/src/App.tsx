@@ -1017,7 +1017,7 @@ export default function App() {
                 </dl>
                 <h3>Download response</h3>
                 <p>The uploaded song with embedded USLT and synchronized SYLT lyrics. With <code>NoVocals=true</code>, a ZIP containing that song and a <code>[NoVocals]</code> MP3 with embedded lyrics.</p>
-                <p>With <code>NoVocalsOnly=true</code>, a ZIP containing the unchanged original and a 320 kbps <code>[NoVocals]</code> MP3. Original ID3 metadata and embedded USLT/SYLT lyrics, including language and timing, are copied without generating new lyrics. The title is prefixed with <code>[NoVocals]</code>, using the original filename stem if the title is missing or blank.</p>
+                <p>With <code>NoVocalsOnly=true</code>, only a 320 kbps <code>[NoVocals]</code> MP3 is returned. Original ID3 metadata and embedded USLT/SYLT lyrics, including language and timing, are copied without generating new lyrics. The title is prefixed with <code>[NoVocals]</code>, using the original filename stem if the title is missing or blank.</p>
                 <p>Uploads are isolated from your library and previous results. Temporary files are removed after download. Requests share the transcription queue; allow a long client timeout.</p>
                 <a href="/docs" target="_blank" rel="noreferrer">Open interactive API documentation ↗</a>
               </section>

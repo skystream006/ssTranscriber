@@ -586,7 +586,8 @@ def prepare_upload(work_dir: Path, file, suffix: str, lyrics: str | None):
     return song
 
 
-def upload_result(work_dir: Path, song: Path, filename: str, copy_no_vocals: bool):
+def upload_result(work_dir: Path, song: Path, filename: str, copy_no_vocals: bool,
+                  no_vocals_only: bool = False):
     manifest = work_dir / 'output' / 'processing_results.json'
     if not manifest.is_file():
         raise HTTPException(status_code=500, detail='Processing did not produce a completion record')
@@ -598,16 +599,19 @@ def upload_result(work_dir: Path, song: Path, filename: str, copy_no_vocals: boo
     accompaniment = work_dir / 'output' / 'songs' / '[NoVocals] song.mp3'
     if not accompaniment.is_file():
         raise HTTPException(status_code=500, detail='The requested no-vocals song could not be produced')
+    accompaniment_name = f'[NoVocals] {Path(filename).stem}.mp3'
+    if no_vocals_only:
+        return accompaniment, accompaniment_name, 'audio/mpeg'
     archive = work_dir / 'result.zip'
     with zipfile.ZipFile(archive, 'w', compression=zipfile.ZIP_STORED) as bundle:
         bundle.write(song, filename)
-        bundle.write(accompaniment, f'[NoVocals] {Path(filename).stem}.mp3')
+        bundle.write(accompaniment, accompaniment_name)
     return archive, f'{Path(filename).stem}.zip', 'application/zip'
 
 
 @app.post('/api/transcribe', response_class=FileResponse, responses={
-    200: {'description': 'Embedded song, or a ZIP containing the song and no-vocals song.',
-          'content': {'application/octet-stream': {}, 'application/zip': {}}},
+    200: {'description': 'Embedded song, no-vocals MP3, or a ZIP containing both songs.',
+          'content': {'application/octet-stream': {}, 'audio/mpeg': {}, 'application/zip': {}}},
 })
 async def transcribe_upload(
     file: UploadFile = File(..., description='Song file to transcribe and embed.'),
@@ -623,7 +627,7 @@ async def transcribe_upload(
     ),
     no_vocals_only: bool = Form(
         False, alias='NoVocalsOnly',
-        description='Run Demucs without transcription and return a ZIP with the unchanged original and a no-vocals MP3 carrying its metadata and embedded lyrics. Overrides NoVocals; ignores transcription options and supplied lyrics.',
+        description='Run Demucs without transcription and return only a no-vocals MP3 carrying the original metadata and embedded lyrics. Overrides NoVocals; ignores transcription options and supplied lyrics.',
     ),
     viet_lyrics_fallback: bool | None = Form(
         None, alias='VietLyricsFallback',
@@ -690,6 +694,7 @@ async def transcribe_upload(
         job.logs.append('Preparing download response…')
         path, download_name, media_type = await asyncio.to_thread(
             upload_result, work_dir, song, filename, request.copy_no_vocals,
+            request.no_vocals_only,
         )
         if job.cancel_requested:
             job.status = 'cancelled'

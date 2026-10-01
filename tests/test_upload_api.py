@@ -294,17 +294,14 @@ class UploadAPITests(unittest.TestCase):
                                NoVocals='false', lyrics='Do not use these words', language='EN')
 
         self.assertEqual(response.status_code, 200, response.text)
-        self.assertEqual(response.headers['content-type'], 'application/zip')
-        with zipfile.ZipFile(io.BytesIO(response.content)) as bundle:
-            self.assertEqual(bundle.namelist(), ['My melody.mp3', '[NoVocals] My melody.mp3'])
-            self.assertEqual(bundle.read('My melody.mp3'), content)
-            instrumental = bundle.read('[NoVocals] My melody.mp3')
-            tags = ID3(io.BytesIO(instrumental))
-            self.assertEqual(tags['TIT2'].text, ['[NoVocals] Original title'])
-            for key in original_tags:
-                if key != 'TIT2':
-                    self.assertEqual(tags[key], original_tags[key])
-            self.assertTrue(instrumental.endswith(b'accompaniment'))
+        self.assertEqual(response.headers['content-type'], 'audio/mpeg')
+        self.assertIn('%5BNoVocals%5D%20My%20melody.mp3', response.headers['content-disposition'])
+        tags = ID3(io.BytesIO(response.content))
+        self.assertEqual(tags['TIT2'].text, ['[NoVocals] Original title'])
+        for key in original_tags:
+            if key != 'TIT2':
+                self.assertEqual(tags[key], original_tags[key])
+        self.assertTrue(response.content.endswith(b'accompaniment'))
         request = self.seen_jobs[-1].request
         self.assertTrue(request.no_vocals_only)
         self.assertTrue(request.vocal_separation)
@@ -317,12 +314,10 @@ class UploadAPITests(unittest.TestCase):
     def test_no_vocals_only_without_tags_does_not_generate_lyrics(self):
         response = self.upload(filename='My melody.mp3', NoVocalsOnly='true')
         self.assertEqual(response.status_code, 200, response.text)
-        with zipfile.ZipFile(io.BytesIO(response.content)) as bundle:
-            self.assertEqual(bundle.read('My melody.mp3'), b'original audio')
-            tags = ID3(io.BytesIO(bundle.read('[NoVocals] My melody.mp3')))
-            self.assertEqual(tags['TIT2'].text, ['[NoVocals] My melody'])
-            self.assertEqual(tags.getall('USLT'), [])
-            self.assertEqual(tags.getall('SYLT'), [])
+        tags = ID3(io.BytesIO(response.content))
+        self.assertEqual(tags['TIT2'].text, ['[NoVocals] My melody'])
+        self.assertEqual(tags.getall('USLT'), [])
+        self.assertEqual(tags.getall('SYLT'), [])
         self.assert_clean()
 
     def test_no_vocals_only_separation_failure_is_an_error(self):
@@ -340,7 +335,7 @@ class UploadAPITests(unittest.TestCase):
         response = self.upload(NoVocalsOnly='true', NoVocals='true', Multilingual='true',
                                VietLyricsFallback='true')
         self.assertEqual(response.status_code, 200, response.text)
-        self.assertEqual(response.headers['content-type'], 'application/zip')
+        self.assertEqual(response.headers['content-type'], 'audio/mpeg')
         command = web_api.build_command(self.seen_jobs[-1].request)
         self.assertIn('--no-vocals-only', command)
         for flag in ('--backend', '--model', '--multilingual', '--fallback-viet-lyrics'):
@@ -494,6 +489,7 @@ class UploadAPITests(unittest.TestCase):
         schema = self.client.get('/openapi.json').json()
         operation = schema['paths']['/api/transcribe']['post']
         self.assertIn('multipart/form-data', operation['requestBody']['content'])
+        self.assertIn('audio/mpeg', operation['responses']['200']['content'])
         self.assertIn('application/zip', operation['responses']['200']['content'])
         body_ref = operation['requestBody']['content']['multipart/form-data']['schema']['$ref']
         body = schema['components']['schemas'][body_ref.rsplit('/', 1)[-1]]
@@ -694,7 +690,7 @@ class UploadAPITests(unittest.TestCase):
                 job.status = 'running'
                 job.return_code = 0
 
-            def prepare_result(work_dir, song, filename, copy_no_vocals):
+            def prepare_result(work_dir, song, filename, copy_no_vocals, no_vocals_only):
                 loop.call_soon_threadsafe(preparing.set)
                 if not release.wait(timeout=10):
                     raise TimeoutError('Download preparation was not released')
