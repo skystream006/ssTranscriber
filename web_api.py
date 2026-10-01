@@ -347,6 +347,7 @@ async def run_job(job: Job):
             kwargs['env'] = {
                 **os.environ,
                 'SSTRANSCRIBER_WORK_DIR': str(job.work_dir if job.work_dir is not None else WORK_DIR),
+                'SSTRANSCRIBER_UPLOAD_FILENAME': (job.filename or '') if job.work_dir is not None else '',
             }
             if job.work_dir is not None:
                 command.extend(['--file', job.upload_name])

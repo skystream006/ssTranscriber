@@ -1,5 +1,6 @@
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -8,12 +9,15 @@ from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
+from mutagen.id3 import ID3, ID3NoHeaderError, TIT2
+
 import backends
 from transcribe_common import (
     LOG_PATH,
     REPO_ROOT,
     ROOT,
     TEMP_DIR,
+    TEXT_ENCODING,
     TRANSCRIPTS_DIR,
     apply_lyrics_mode,
     archive_demucs_results,
@@ -115,6 +119,18 @@ def _copy_no_vocals_song(source_audio: Path, vocals_path: Path, transcript, segm
     songs_dir.mkdir(parents=True, exist_ok=True)
     output_path = songs_dir / f'[NoVocals] {source_audio.stem}.mp3'
     shutil.copy2(no_vocals_source, output_path)
+    try:
+        source_tags = ID3(source_audio)
+    except ID3NoHeaderError:
+        source_tags = ID3()
+    title = source_tags.get('TIT2')
+    titles = [text.strip() for text in title.text if text.strip()] if title else []
+    fallback_title = Path(os.environ.get('SSTRANSCRIBER_UPLOAD_FILENAME') or source_audio.name).stem
+    source_tags.add(TIT2(
+        encoding=TEXT_ENCODING,
+        text=[f'[NoVocals] {text}' for text in (titles or [fallback_title])],
+    ))
+    source_tags.save(output_path, v2_version=3)
     write_lyrics_to_file(
         output_path,
         transcript,

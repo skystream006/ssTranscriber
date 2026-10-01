@@ -15,7 +15,7 @@ from unittest.mock import patch
 
 import httpx
 from fastapi.testclient import TestClient
-from mutagen.id3 import ID3
+from mutagen.id3 import APIC, ID3, SYLT, TALB, TIT2, TPE1, TRCK, TXXX, USLT
 
 import web_api
 
@@ -211,7 +211,67 @@ class UploadAPITests(unittest.TestCase):
                 tags = ID3(io.BytesIO(bundle.read(name)))
                 self.assertEqual(tags.getall('USLT')[0].text, 'A gentle melody')
                 self.assertTrue(tags.getall('SYLT'))
+            instrumental_tags = ID3(io.BytesIO(bundle.read('[NoVocals] My melody.mp3')))
+            self.assertEqual(instrumental_tags['TIT2'].text, ['[NoVocals] My melody'])
         self.assert_clean()
+
+    def test_no_vocals_copies_original_metadata_before_embedding_lyrics(self):
+        original = io.BytesIO(b'original audio')
+        original_tags = ID3()
+        for frame in (
+            TIT2(encoding=1, text='Original title'),
+            TPE1(encoding=1, text='Original artist'),
+            TALB(encoding=1, text='Original album'),
+            TRCK(encoding=1, text='3/12'),
+            TXXX(encoding=1, desc='Custom field', text='Custom value'),
+            APIC(encoding=1, mime='image/jpeg', type=3, desc='Cover', data=b'cover image'),
+            USLT(encoding=1, lang='eng', desc='Old lyrics', text='Outdated lyrics'),
+            SYLT(encoding=1, lang='eng', desc='Old lyrics', format=2, type=1,
+                 text=[('Outdated lyrics', 0)]),
+        ):
+            original_tags.add(frame)
+        original_tags.save(original, v2_version=3)
+
+        response = self.upload(content=original.getvalue(), NoVocals='true')
+
+        self.assertEqual(response.status_code, 200, response.text)
+        with zipfile.ZipFile(io.BytesIO(response.content)) as bundle:
+            instrumental = bundle.read('[NoVocals] song.mp3')
+            tags = ID3(io.BytesIO(instrumental))
+            for key in ('TPE1', 'TALB', 'TRCK', 'TXXX:Custom field', 'APIC:Cover'):
+                self.assertIn(key, tags)
+                self.assertEqual(tags[key], original_tags[key])
+            self.assertEqual(tags['TIT2'].text, ['[NoVocals] Original title'])
+            original_output_tags = ID3(io.BytesIO(bundle.read('song.mp3')))
+            self.assertEqual(original_output_tags['TIT2'].text, ['Original title'])
+            self.assertEqual(len(tags.getall('USLT')), 1)
+            self.assertEqual(tags.getall('USLT')[0].text, 'A gentle melody')
+            self.assertEqual(len(tags.getall('SYLT')), 1)
+            self.assertEqual(tags.getall('SYLT')[0].text, [('A gentle melody', 500)])
+            self.assertTrue(instrumental.endswith(b'accompaniment'))
+        self.assert_clean()
+
+    def test_no_vocals_title_falls_back_to_filename(self):
+        for title in (None, '', '   '):
+            with self.subTest(title=title):
+                original = io.BytesIO(b'original audio')
+                original_tags = ID3()
+                original_tags.add(TPE1(encoding=1, text='Original artist'))
+                if title is not None:
+                    original_tags.add(TIT2(encoding=1, text=title))
+                original_tags.save(original, v2_version=3)
+
+                response = self.upload(filename='My melody.mp3', content=original.getvalue(),
+                                       NoVocals='true')
+
+                self.assertEqual(response.status_code, 200, response.text)
+                with zipfile.ZipFile(io.BytesIO(response.content)) as bundle:
+                    tags = ID3(io.BytesIO(bundle.read('[NoVocals] My melody.mp3')))
+                    self.assertEqual(tags['TIT2'].text, ['[NoVocals] My melody'])
+                    self.assertEqual(tags['TPE1'].text, ['Original artist'])
+                    self.assertEqual(tags.getall('USLT')[0].text, 'A gentle melody')
+                    self.assertTrue(tags.getall('SYLT'))
+                self.assert_clean()
 
     def test_no_vocals_is_job_specific_and_enables_prerequisites(self):
         for separate in (False, True):
